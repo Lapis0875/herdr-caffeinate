@@ -1,0 +1,15 @@
+@@batt
+Now drawing from 'AC Power'
+ -InternalBattery-0 (id=23724131)	85%; charging; 0:40 remaining present: true
+@@pmset
+ SleepDisabled		1
+@@lid
+      "AppleClamshellCausesSleep" = Yes
+      "AppleClamshellState" = Yes
+@@thermal
+2
+@@stat
+alive=1795106990
+claim=1795106995
+restore=1795094890
+now=1795107000

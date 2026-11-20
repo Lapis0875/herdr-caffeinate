@@ -1,0 +1,7 @@
+@@batt
+Now drawing from 'AC Power'
+@@pmset
+@@lid
+      "AppleClamshellState" = No
+@@stat
+now=1795107000

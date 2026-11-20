@@ -1,0 +1,13 @@
+@@batt
+Now drawing from 'Battery Power'
+ -InternalBattery-0 (id=23724131)	19%; discharging; 1:02 remaining present: true
+@@pmset
+ SleepDisabled		0
+@@lid
+      "AppleClamshellCausesSleep" = Yes
+      "AppleClamshellState" = No
+@@stat
+alive=1795106990
+claim=
+restore=
+now=1795107000

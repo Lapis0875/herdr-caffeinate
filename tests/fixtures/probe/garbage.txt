@@ -1,0 +1,26 @@
+Bad request.
+now=1795107000
+@@batt
+Now drawing from 'Solar Power'
+ -InternalBattery-0 (id=1)	250%; charged; 0:00 remaining present: true
+@@pmset
+ SleepDisabled		maybe
+"SleepDisabled" = Yes
+@@lid
+      "AppleClamshellState" = Maybe
+      "AppleClamshellCausesSleep" = "Yes"
+      "AppleClamshellStateX" = Yes
+@@thermal
+execution error: Error: ReferenceError: Can't find variable: ObjC (-2700)
+2
+@@stat
+alive=-5
+claim=abc
+restore=1e9
+now=17951069180000000
+@@batt
+Now drawing from 'AC Power'
+ -InternalBattery-0 (id=23724131)	100%; charged; 0:00 remaining present: true
+@@
+@@ stat
+sec = 
