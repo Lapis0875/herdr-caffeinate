@@ -266,14 +266,18 @@ export class Engine {
     cx.spawn((lcx) => this.loop(run, lcx), { owner: null });
   }
 
-  /** Marks a run stopped. A request it was handling goes back to the queue for the next run. */
+  /** Marks a run stopped. A request it was handling goes back to the queue for the next run, unless it is a command
+   *  already past its reducer step: its settings and session are written, so it is finished here (applying it again
+   *  would toggle twice) and the next run's boot carries out the rest. */
   halt(run) {
     if (run.dead) return;
     run.dead = true;
     if (this.run === run) this.run = null;
     const req = this.inflight;
     this.inflight = null;
-    if (req) this.queue.unshift(req);
+    if (!req) return;
+    if (req.applied) req.resolve(req.kind === "command" ? parseCommand(req.text) : null);
+    else this.queue.unshift(req);
   }
 
   /** Host calls that throw STOPPED once the run is dead (before the call and after it settles); each settled call
@@ -367,14 +371,16 @@ export class Engine {
     return null;
   }
 
-  /** When a light step is due while a session runs: at the timer end and at the agent linger end. */
+  /** When a light step is due while a session runs: at the timer end, and at the agent linger end once no agent
+   *  works (while one works the Mac is held anyway, and every step would move the end again). A due counts as done
+   *  by a step at or after it (`run.lightAt` is the time the last step ran with). */
   timeDues(run) {
     const session = run.state.session;
     if (!run.booted || !session) return [];
     const dues = [];
     if (session.mode === "timer") dues.push(session.endsAt);
     const last = run.state.agent?.lastWorkingAt ?? null;
-    if (session.mode === "agent" && last !== null) dues.push(last + run.settings.agent.lingerSec * 1000);
+    if (session.mode === "agent" && last !== null && run.working === 0) dues.push(last + run.settings.agent.lingerSec * 1000);
     return dues.filter((due) => due > run.lightAt);
   }
 
@@ -467,7 +473,6 @@ export class Engine {
 
   async cycle(run, { event, probe = false, privilege = false, thermal = false, forceSettings = false, publish = false }) {
     const now = this.deps.now();
-    run.lightAt = now;
     if (probe) run.fullAt = now;
     if (this.pokeDue !== null && this.pokeDue <= now + SLACK_MS) this.pokeDue = null;
     const loaded = await run.store.loadSettings(forceSettings);
@@ -579,8 +584,9 @@ export class Engine {
       working = 0;
     }
     // The first step after the last agent stopped still counts it, so the linger starts when the engine saw it stop
-    // rather than at the step before.
-    const counted = working === 0 && run.working > 0 ? run.working : working;
+    // rather than at the step before. With no linger it ends at once.
+    const carry = working === 0 && run.working > 0 && run.settings.agent.lingerSec > 0;
+    const counted = carry ? run.working : working;
     run.working = working;
     return {
       ...applyFake(run.raw, run.settings),
@@ -593,11 +599,14 @@ export class Engine {
   }
 
   /** One reducer step; a settings effect is written, and on a stale settings.json the step runs again on the
-   *  re-read settings. */
+   *  re-read settings. A session or trigger change is written to runtime.json at once, so a command's whole outcome
+   *  is on disk before the slow reconcile; from its first write on, a command counts as applied (see `halt`). */
   async advance(run, event) {
     const facts = this.facts(run);
     for (let attempt = 0; ; attempt += 1) {
-      const out = step(run.state, { ...event, now: this.deps.now() }, facts, run.settings);
+      const now = this.deps.now();
+      const out = step(run.state, { ...event, now }, facts, run.settings);
+      if (event.type === "command" && this.inflight && !run.dead) this.inflight.applied = true;
       const effect = out.effects.find((e) => e.type === "settings");
       if (effect && !(await run.store.saveSettings(effect.settings))) {
         if (attempt === 0 && run.store.settingsOk) {
@@ -609,6 +618,10 @@ export class Engine {
       }
       for (const e of out.effects) if (e.type === "log") this.log(e.message, false);
       run.state = out.state;
+      // Dues are measured against the time the step ran with, not the cycle's start: a step stamps the agent's last
+      // working time with its own `now`, which is later than the cycle's start after the awaited reads.
+      run.lightAt = now;
+      if (out.effects.some((e) => e.type === "runtime")) await run.store.saveRuntime(toRuntime(run.state, run.holder, null));
       return out;
     }
   }

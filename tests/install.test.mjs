@@ -5,9 +5,9 @@
 // (tests/helpers/sandbox.mjs).
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {access, constants, lstat, mkdir, readdir, readFile, rm, stat, symlink, writeFile} from 'node:fs/promises';
+import {access, chmod, constants, lstat, mkdir, readdir, readFile, rm, stat, symlink, utimes, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
-import {BIN, LABEL, clearCalls, copyBin, makeSandbox, readCalls, run, setWorld, writeFakes} from './helpers/sandbox.mjs';
+import {BIN, LABEL, clearCalls, copyBin, makeSandbox, readCalls, rewrite, run, setWorld, writeFakes} from './helpers/sandbox.mjs';
 import {absoluteTools, bareTools, shellCode, sourcesCode} from './helpers/shell-scan.mjs';
 
 const C6 = (user) => `${user} ALL = (root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1\n`;
@@ -329,6 +329,39 @@ async function installed(t) {
 }
 
 const ROOT_PATHS = [SUDOERS, `${SUDOERS}.new`, HELPER, PLIST, STATE];
+const CLAIM_REL = 'Users/tester/.herdr/herdr-caffeinate/claim';
+const NOW = 1795100000;
+
+// One daemon run as launchd starts it from the installed plist (RunAtLoad, or
+// any 15 s tick): the installed helper copy with its tools faked and its root
+// paths in the sandbox; the fake `date` reports $W/now.
+const WATCHDOG_TOOLS = ['/usr/bin/pmset', '/usr/sbin/ioreg', '/usr/sbin/sysctl', '/usr/bin/touch', '/usr/bin/stat', '/bin/date', '/bin/rm'];
+async function runDaemon(side) {
+  const [shell, helper, claim] = (await plistJson(side.at(PLIST))).ProgramArguments;
+  assert.equal(helper, HELPER);
+  const {sb} = side;
+  await writeFakes(sb, WATCHDOG_TOOLS.map(fakeName));
+  const text = rewrite(await readFile(side.at(HELPER), 'utf8'), [
+    ...WATCHDOG_TOOLS.map((tool) => [tool, join(sb.fake, fakeName(tool))]),
+    [STATE, side.at(STATE)],
+    ['/Users/', `${sb.root}/Users/`],
+  ]);
+  const copy = side.at('run/failsafe.sh');
+  await mkdir(join(copy, '..'), {recursive: true});
+  await writeFile(copy, text);
+  await clearCalls(sb);
+  const r = await run([shell, copy, claim]);
+  const calls = await readCalls(sb);
+  return {...r, calls, writes: calls.filter((call) => /^pmset (-a |sleepnow)/.test(call))};
+}
+
+async function writeClaim(side, mtime) {
+  const claim = side.at(CLAIM_REL);
+  await mkdir(join(claim, '..'), {recursive: true});
+  await writeFile(claim, '{}');
+  if (mtime !== undefined) await utimes(claim, mtime, mtime);
+  return claim;
+}
 
 test('uninstall restores disablesleep 0 when armed, then removes every C4 root path', async (t) => {
   const side = await installed(t);
@@ -351,16 +384,86 @@ test('uninstall restores disablesleep 0 when armed, then removes every C4 root p
   assert.match(r.stdout, /^uninstalled$/m);
 });
 
-test('uninstall restores disablesleep 0 when only the claim exists', async (t) => {
+test('uninstall restores disablesleep 0 when only the claim exists, then removes the claim', async (t) => {
   const side = await installed(t);
-  const claim = side.at('Users/tester/.herdr/herdr-caffeinate/claim');
-  await mkdir(join(claim, '..'), {recursive: true});
-  await writeFile(claim, '{}');
+  const claim = await writeClaim(side);
   await side.world({sd: '1\n'});
   const r = await side.run('uninstall.sh');
   assert.equal(r.code, 0, r.stderr);
   assert.equal(r.sudo[0], 'pmset -a disablesleep 0');
   assert.equal(await readFile(join(side.sb.world, 'sd'), 'utf8'), '0\n');
+  assert.equal(await exists(claim), false, 'claim removed after the restore');
+  assert.equal(await exists(join(claim, '..')), true, '~/.herdr/herdr-caffeinate/ stays');
+});
+
+test('uninstall removes a stale claim, so a reinstalled watchdog leaves a foreign disablesleep 1 alone', async (t) => {
+  const side = await installed(t);
+  // Herdr died with closed-lid on: the watchdog restores 0 and records the
+  // stale claim in `handled`; the claim itself stays on disk.
+  const claim = await writeClaim(side, NOW - 100);
+  await writeFile(side.at(`${STATE}/armed`), '');
+  await side.world({now: `${NOW}\n`, sd: '1\n'});
+  const died = await runDaemon(side);
+  assert.equal(died.code, 0, died.stderr);
+  assert.deepEqual(died.writes, ['pmset -a disablesleep 0']);
+  assert.equal(await readFile(side.at(`${STATE}/handled`), 'utf8'), `${NOW - 100}\n`);
+
+  const uninstall = await side.run('uninstall.sh');
+  assert.equal(uninstall.code, 0, uninstall.stderr);
+  assert.deepEqual(uninstall.sudo.filter((call) => call.startsWith('pmset')), [], 'SleepDisabled already reads 0');
+  assert.equal(await exists(claim), false, 'claim removed');
+  assert.equal(await exists(side.at(`${STATE}/handled`)), false, 'handled removed');
+
+  // Another tool sets disablesleep 1, then herdr-caffeinate is installed again.
+  await side.world({sd: '1\n'});
+  const reinstall = await side.run('install.sh');
+  assert.equal(reinstall.code, 0, reinstall.stderr);
+  const first = await runDaemon(side);
+  assert.equal(first.code, 0, first.stderr);
+  assert.deepEqual(first.writes, [], 'no disablesleep 0 over the foreign 1');
+  assert.equal(await readFile(join(side.sb.world, 'sd'), 'utf8'), '1\n');
+  assert.deepEqual(await readdir(side.at(STATE)), ['alive']);
+
+  // Control: had the stale claim stayed, this watchdog would have turned the
+  // foreign 1 off.
+  await writeClaim(side, NOW - 100);
+  const control = await runDaemon(side);
+  assert.deepEqual(control.writes, ['pmset -a disablesleep 0']);
+});
+
+test('uninstall removes a symlinked claim itself and leaves a directory at the claim path', async (t) => {
+  const linked = await installed(t);
+  const claim = linked.at(CLAIM_REL);
+  await mkdir(join(claim, '..'), {recursive: true});
+  const target = linked.at('Users/tester/keep-me');
+  await writeFile(target, 'x');
+  await symlink(target, claim);
+  const r = await linked.run('uninstall.sh');
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(await exists(claim), false, 'link removed');
+  assert.equal(await readFile(target, 'utf8'), 'x', 'target kept');
+
+  const withDir = await installed(t);
+  const dir = withDir.at(CLAIM_REL);
+  await mkdir(dir, {recursive: true});
+  const d = await withDir.run('uninstall.sh');
+  assert.equal(d.code, 0, d.stderr);
+  assert.equal((await stat(dir)).isDirectory(), true, 'not a claim; left alone');
+});
+
+test('uninstall exits 40 when the claim cannot be removed', async (t) => {
+  const side = await installed(t);
+  const claim = await writeClaim(side);
+  const folder = join(claim, '..');
+  await chmod(folder, 0o500);
+  let r;
+  try {
+    r = await side.run('uninstall.sh');
+  } finally {
+    await chmod(folder, 0o700);
+  }
+  assert.equal(r.code, 40, r.stderr);
+  assert.match(r.stderr, /still present: \S*\/\.herdr\/herdr-caffeinate\/claim$/m);
 });
 
 test('uninstall leaves a foreign SleepDisabled 1 alone and says so', async (t) => {

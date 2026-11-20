@@ -9,11 +9,16 @@
 #    `pmset -a disablesleep 0` unless SleepDisabled already reads 0.
 # 2. Stop the daemon (`launchctl bootout`).
 # 3. Remove the plist, the helper, /var/db/herdr-caffeinate and the sudoers
-#    file, then check that each is gone and the daemon is not loaded.
+#    file.
+# 4. Remove the claim (only that file; ~/.herdr/herdr-caffeinate/ stays).
+#    Left behind, it is a stale claim the next install's watchdog has not
+#    handled (`handled` goes with the state directory), so that watchdog
+#    would turn off a `disablesleep 1` set by another tool.
+# 5. Check that each path is gone and the daemon is not loaded.
 #    A whole-config `sudo visudo -c` runs only to print other files'
 #    findings as notes (Amphetamine's 0644 amphetamine_PowerProtect fails
 #    it while sudo still reads it); it never changes the exit code.
-# 4. Say so when SleepDisabled is still 1, set by another tool.
+# 6. Say so when SleepDisabled is still 1, set by another tool.
 #
 # Exit: 0 everything removed; 1 refused (root, invalid user or home);
 # 40 something is left, or the disablesleep restore failed.
@@ -129,7 +134,8 @@ say 'sudo may ask for your admin password.'
 PARTIAL=0
 RESTORE_FAILED=0
 
-# 1. Turn disablesleep off when closed-lid may be on.
+# 1. Turn disablesleep off when closed-lid may be on. This reads the claim
+# before step 4 removes it.
 if [ -e "$CLAIM" ] || [ -L "$CLAIM" ] || [ -e "$STATE/armed" ]; then
 	read_sleep_disabled
 	if [ "$SD" != 0 ]; then
@@ -150,8 +156,15 @@ fi
 /usr/bin/sudo /bin/rm -rf "$STATE" || PARTIAL=1
 /usr/bin/sudo /bin/rm -f "$SUDOERS" "$SUDOERS.new" || PARTIAL=1
 
-# Check what is left, our sudoers file included; `launchctl print` needs no
-# privilege.
+# 4. The claim, as yourself. A symlink is removed itself, never its target;
+# anything else at that path (a directory) is no claim to the watchdog and
+# is left alone.
+if [ -L "$CLAIM" ] || [ -f "$CLAIM" ]; then
+	/bin/rm -f "$CLAIM" || PARTIAL=1
+fi
+
+# 5. Check what is left, our sudoers file and the claim included;
+# `launchctl print` needs no privilege.
 if /bin/launchctl print "system/$LABEL" >/dev/null 2>&1; then
 	warn "the daemon system/$LABEL is still loaded"
 	PARTIAL=1
@@ -162,6 +175,10 @@ for p in "$PLIST" "$HELPER" "$STATE" "$SUDOERS" "$SUDOERS.new"; do
 		PARTIAL=1
 	fi
 done
+if [ -L "$CLAIM" ] || [ -f "$CLAIM" ]; then
+	warn "still present: $CLAIM"
+	PARTIAL=1
+fi
 visudo_notes 'note: sudo visudo -c, which checks every sudoers file, reports the lines below about files herdr-caffeinate does not manage:'
 
 read_sleep_disabled

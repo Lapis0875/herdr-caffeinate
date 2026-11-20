@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { initialState, step } from '../mods/herdr-caffeinate/core/machine.js';
-import { buildShared, defaultSettings } from '../mods/herdr-caffeinate/core/state.js';
+import { buildShared, defaultSettings, toRuntime } from '../mods/herdr-caffeinate/core/state.js';
 
 const T0 = 1763568000000;
 const MIN = 60000;
@@ -143,6 +143,27 @@ test('mode on and off; toggle returns to the last of on and agent', () => {
   e.command(T0, 'toggle');
   assert.deepEqual(sessionOf(e.state), ['agent', 'user']);
   assert.equal(e.command(T0, 'mode:off').desired.awake, false);
+});
+
+test('toggle after Agent → Off → a restart (runtime.json round trip) turns Agent back on (C1)', () => {
+  const before = engine();
+  before.boot(T0);
+  before.command(T0 + 1000, 'mode:agent');
+  before.command(T0 + 2000, 'mode:off');
+  assert.equal(before.state.session, null);
+  // What the engine writes to runtime.json, read back after a restart; settings.json says Off.
+  const saved = JSON.parse(JSON.stringify(toRuntime(before.state)));
+  assert.equal(saved.lastMode, 'agent');
+  const after = engine({ mode: 'off' }, saved);
+  after.boot(T0 + 60000);
+  assert.equal(after.state.session, null);
+  after.command(T0 + 61000, 'toggle');
+  assert.deepEqual(sessionOf(after.state), ['agent', 'user']);
+  // Without a recorded mode toggle turns On, as before.
+  const fresh = engine({ mode: 'off' }, { ...saved, lastMode: undefined });
+  fresh.boot(T0 + 60000);
+  fresh.command(T0 + 61000, 'toggle');
+  assert.deepEqual(sessionOf(fresh.state), ['on', 'user']);
 });
 
 test('display is held only while awake and the display toggle is on', () => {

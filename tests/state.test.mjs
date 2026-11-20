@@ -109,9 +109,10 @@ test('runtime.json normalizes; anything invalid reads as nothing recorded', () =
     holder: { pid: 123, argv: ['/usr/bin/caffeinate', '-i', '-s', '-w', '77'], appPid: 77 },
     keeper: { pid: 124, argv: ['/bin/sh', 'keeper.sh'] },
     trigger: { suppressed: true, lastAc: false },
+    lastMode: 'agent',
   };
   assert.deepEqual(normalizeRuntime(good), good);
-  const empty = { v: 1, session: null, holder: null, keeper: null, trigger: { suppressed: false, lastAc: null } };
+  const empty = { v: 1, session: null, holder: null, keeper: null, trigger: { suppressed: false, lastAc: null }, lastMode: null };
   for (const bad of [null, 'x', {}, { ...good, v: 2 }]) assert.deepEqual(normalizeRuntime(bad), empty, JSON.stringify(bad));
   const sessionOf = (session) => normalizeRuntime({ v: 1, session }).session;
   assert.equal(sessionOf({ mode: 'timer', origin: 'user', startedAt: T0 }), null);
@@ -125,8 +126,10 @@ test('runtime.json normalizes; anything invalid reads as nothing recorded', () =
   assert.equal(normalizeRuntime({ v: 1, holder: { pid: 5, argv: ['x'] } }).holder, null);
   assert.equal(normalizeRuntime({ v: 1, keeper: { pid: 5, argv: [1] } }).keeper, null);
   assert.deepEqual(normalizeRuntime({ v: 1, trigger: { suppressed: 'yes', lastAc: 1 } }).trigger, { suppressed: false, lastAc: null });
+  for (const lastMode of ['timer', 'off', 'AGENT', 1, null]) assert.equal(normalizeRuntime({ v: 1, lastMode }).lastMode, null, String(lastMode));
   assert.deepEqual(toRuntime(initialState(good), good.holder, good.keeper), good);
-  assert.deepEqual(toRuntime(initialState(null)), empty);
+  // Nothing recorded: toggle turns On.
+  assert.deepEqual(toRuntime(initialState(null)), { ...empty, lastMode: 'on' });
 });
 
 test('parseCommand accepts every C1 command and rejects malformed ones', () => {

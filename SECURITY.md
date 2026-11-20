@@ -29,7 +29,7 @@ rule and a root fail-safe. This section describes what each piece can do and to 
 | The mod (`sys/`, `bin/probe.sh`) | you, inside Herdr | start and stop this Herdr's `caffeinate` holder; write its claim file; run the two `sudo -n` commands below; run `pmset sleepnow` |
 | The sudoers rule `/etc/sudoers.d/herdr-caffeinate` | root, through `sudo -n`, for your user only | `/usr/bin/pmset -a disablesleep 0` and `/usr/bin/pmset -a disablesleep 1`, nothing else |
 | The fail-safe `/Library/PrivilegedHelperTools/io.github.lapis0875.herdr-caffeinate.failsafe` | root, started by launchd every 15 s | `pmset -a disablesleep 0`, `pmset sleepnow`, files under `/var/db/herdr-caffeinate/` |
-| `bin/install.sh`, `bin/uninstall.sh` | you, with `sudo` and your admin password | create or remove the four root paths above and `/Library/LaunchDaemons/io.github.lapis0875.herdr-caffeinate.failsafe.plist` |
+| `bin/install.sh`, `bin/uninstall.sh` | you, with `sudo` and your admin password | create or remove the four root paths above and `/Library/LaunchDaemons/io.github.lapis0875.herdr-caffeinate.failsafe.plist`; the uninstaller also removes your `~/.herdr/herdr-caffeinate/claim` (as you, no `sudo`) |
 
 ### The sudoers rule
 

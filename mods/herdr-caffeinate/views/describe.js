@@ -62,7 +62,7 @@ export function minutesLabel(n) {
   return m ? t("timer.hoursMinutes", { h, m }) : t("timer.hours", { n: h });
 }
 
-/** The countdown of a running timer ("41:59", "1:05"), or "" without one. */
+/** The countdown of a running timer ("41:59", "1:05:00"), or "" without one. */
 export function countdown(L, now) {
   return L?.endsAt == null ? "" : formatUntil(L.endsAt, now);
 }

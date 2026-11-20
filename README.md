@@ -236,9 +236,11 @@ Press **Uninstall…** in the menu (or `herdr-app do herdr-caffeinate.uninstall`
 1. If `~/.herdr/herdr-caffeinate/claim` or `/var/db/herdr-caffeinate/armed` exists (closed-lid may be on) and
    `SleepDisabled` does not read 0, it runs `sudo pmset -a disablesleep 0`.
 2. `sudo launchctl bootout system/io.github.lapis0875.herdr-caffeinate.failsafe`.
-3. Removes the plist, the helper, `/var/db/herdr-caffeinate/` and `/etc/sudoers.d/herdr-caffeinate`.
-4. Checks that the daemon is gone (`launchctl print`) and that no path is left, `/etc/sudoers.d/herdr-caffeinate`
-   included. A whole-config `sudo visudo -c` follows only to print what it reports about other apps' sudoers files
+3. Removes the plist, the helper, `/var/db/herdr-caffeinate/` and `/etc/sudoers.d/herdr-caffeinate`, then, as you without
+   `sudo`, `~/.herdr/herdr-caffeinate/claim` (only that file; a symlink is removed itself, never its target). Left behind,
+   that stale claim would make a later install's fail-safe turn off a `disablesleep 1` set by another tool.
+4. Checks that the daemon is gone (`launchctl print`) and that no path is left, `/etc/sudoers.d/herdr-caffeinate` and the
+   claim included. A whole-config `sudo visudo -c` follows only to print what it reports about other apps' sudoers files
    as `note:` lines (such as Amphetamine's 0644 file above); it never changes the exit code.
 5. If `SleepDisabled` still reads 1, another tool set it; it says so and leaves it (`sudo pmset -a disablesleep 0`
    clears it).
@@ -249,8 +251,8 @@ Press **Uninstall…** in the menu (or `herdr-app do herdr-caffeinate.uninstall`
 | 1 | refused: run as root, or a user name or home it will not use |
 | 40 | something is left, or the `disablesleep 0` restore failed; the messages above say what |
 
-The macOS item under "Allow in the Background" goes away with the daemon. `~/.herdr/herdr-caffeinate/` stays (it is
-empty when closed-lid is off); remove it with `rm -r ~/.herdr/herdr-caffeinate`.
+The macOS item under "Allow in the Background" goes away with the daemon. `~/.herdr/herdr-caffeinate/` stays (empty
+once the uninstaller has removed the claim); remove it with `rm -r ~/.herdr/herdr-caffeinate`.
 
 ## Commands
 
@@ -301,7 +303,8 @@ kept.
 | `fake` | none | only with `debug: true`: `{ "ac", "percent", "thermal", "lidClosed" }` replace what the mod reads from the Mac, for testing the safety rules |
 
 The mod also writes, in the same folder: `runtime.json` (the running session and its end, the holder's pid and command,
-the power adapter trigger's state) and `state.json` (a copy of the shared state below, for scripts:
+the power adapter trigger's state, and the last of On/Agent that `toggle` returns to) and `state.json` (a copy of the
+shared state below, for scripts:
 `jq . ~/.config/herdr-app/data/herdr-caffeinate/state.json`).
 
 Other mods read the shared key `herdr-caffeinate.state`:
@@ -405,7 +408,7 @@ passed as arguments, never pasted into a shell string.
 
 **The installer and uninstaller** (as you, in that tab): `/usr/bin/id`, `/usr/bin/stat`, `/usr/bin/mktemp`,
 `/usr/bin/sed` (rendering the templates), `/usr/sbin/visudo -cf` (the rendered temporary file), `/usr/bin/plutil -lint`,
-`/bin/date`, `/bin/sleep`, `/bin/rm` (its temporary folder), `/usr/bin/pmset -g` (reading `SleepDisabled`),
+`/bin/date`, `/bin/sleep`, `/bin/rm` (its temporary folder, and in the uninstaller `~/.herdr/herdr-caffeinate/claim`), `/usr/bin/pmset -g` (reading `SleepDisabled`),
 `/bin/launchctl print` (is the daemon gone), and through `/usr/bin/sudo`: `/usr/bin/install` (each root file with its
 owner and mode), `/bin/mv`, `/usr/sbin/visudo -cf /etc/sudoers.d/herdr-caffeinate` (our installed file),
 `-n -l /usr/bin/pmset -a disablesleep 0` and `… 1` (does sudo grant the rule; runs nothing), `-n /usr/sbin/visudo -c`

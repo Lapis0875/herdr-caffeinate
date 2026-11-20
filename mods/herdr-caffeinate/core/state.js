@@ -184,7 +184,11 @@ export function normalizeSession(v) {
   return { mode: v.mode, origin: v.origin, startedAt: v.startedAt, endsAt: null };
 }
 
-/** `runtime.json` from any parsed value; anything invalid (or another `v`) reads as nothing recorded. */
+/** The modes `toggle` turns back on (C1: Off ↔ the last of on and agent). */
+const TOGGLE_MODES = ["on", "agent"];
+
+/** `runtime.json` from any parsed value; anything invalid (or another `v`) reads as nothing recorded. `lastMode` is
+ *  the mode `toggle` turns on (null when unknown). */
 export function normalizeRuntime(raw) {
   const r = isObject(raw) && raw.v === 1 ? raw : {};
   const h = r.holder;
@@ -196,6 +200,7 @@ export function normalizeRuntime(raw) {
     holder: isObject(h) && pid(h.pid) && argv(h.argv) && pid(h.appPid) ? { pid: h.pid, argv: [...h.argv], appPid: h.appPid } : null,
     keeper: isObject(k) && pid(k.pid) && argv(k.argv) ? { pid: k.pid, argv: [...k.argv] } : null,
     trigger: { suppressed: t.suppressed === true, lastAc: typeof t.lastAc === "boolean" ? t.lastAc : null },
+    lastMode: TOGGLE_MODES.includes(r.lastMode) ? r.lastMode : null,
   };
 }
 
@@ -207,6 +212,7 @@ export function toRuntime(state, holder = null, keeper = null) {
     holder,
     keeper,
     trigger: { suppressed: state?.trigger?.suppressed === true, lastAc: typeof state?.trigger?.lastAc === "boolean" ? state.trigger.lastAc : null },
+    lastMode: TOGGLE_MODES.includes(state?.lastMode) ? state.lastMode : null,
   };
 }
 

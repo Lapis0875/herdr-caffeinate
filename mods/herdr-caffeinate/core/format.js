@@ -9,15 +9,15 @@ export function remainingMs(endsAt, now) {
   return Math.max(0, endsAt - now);
 }
 
-/** A countdown label for `ms` milliseconds left: under one hour `m:ss` ("1:59", "0:05"), from one hour `h:mm`
- *  ("1:00", "24:00"). Rounds up like a countdown, so it reads "0:00" only when nothing is left and never shows a
- *  longer time than was set. Negative values count as 0; a non-finite value gives "". */
+/** A countdown label for `ms` milliseconds left: under one hour `m:ss` ("1:59", "0:05", "1:00" is one minute), from
+ *  one hour `h:mm:ss` ("1:00:00", "24:00:00"), so a minute and an hour never read the same. Rounds up like a countdown,
+ *  so it reads "0:00" only when nothing is left and never shows a longer time than was set. Negative values count as
+ *  0; a non-finite value gives "". */
 export function formatRemaining(ms) {
   if (!Number.isFinite(ms)) return "";
   const seconds = Math.ceil(Math.max(0, ms) / 1000);
   if (seconds < 3600) return `${Math.floor(seconds / 60)}:${pad2(seconds % 60)}`;
-  const minutes = Math.ceil(seconds / 60);
-  return `${Math.floor(minutes / 60)}:${pad2(minutes % 60)}`;
+  return `${Math.floor(seconds / 3600)}:${pad2(Math.floor(seconds / 60) % 60)}:${pad2(seconds % 60)}`;
 }
 
 /** The countdown label for a session ending at `endsAt`, or "" when there is no end time. */

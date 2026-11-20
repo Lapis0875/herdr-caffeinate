@@ -232,8 +232,10 @@ sudoers 규칙 하나가 허용하는 정확히 두 명령만 `sudo -n`(대화 �
 1. `~/.herdr/herdr-caffeinate/claim`이나 `/var/db/herdr-caffeinate/armed`가 있고(덮개 닫힘이 켜져 있을 수 있음)
    `SleepDisabled`가 0이 아니면 `sudo pmset -a disablesleep 0`을 실행합니다.
 2. `sudo launchctl bootout system/io.github.lapis0875.herdr-caffeinate.failsafe`.
-3. plist, 도우미, `/var/db/herdr-caffeinate/`, `/etc/sudoers.d/herdr-caffeinate`를 지웁니다.
-4. 데몬이 사라졌는지(`launchctl print`), `/etc/sudoers.d/herdr-caffeinate`를 포함해 남은 경로가 없는지 확인합니다.
+3. plist, 도우미, `/var/db/herdr-caffeinate/`, `/etc/sudoers.d/herdr-caffeinate`를 지우고, `sudo` 없이 내 계정으로
+   `~/.herdr/herdr-caffeinate/claim` 파일 하나만 지웁니다(심볼릭 링크면 링크만 지우고 대상은 건드리지 않습니다). 남겨 두면
+   오래된 claim 때문에 다시 설치했을 때 안전장치가 다른 도구가 설정한 `disablesleep 1`을 꺼 버립니다.
+4. 데몬이 사라졌는지(`launchctl print`), `/etc/sudoers.d/herdr-caffeinate`와 claim을 포함해 남은 경로가 없는지 확인합니다.
    이어서 sudoers 파일 전체를 보는 `sudo visudo -c`를 실행하지만, 다른 앱의 sudoers 파일에 대한 내용(위의 Amphetamine
    0644 파일 등)을 `note:` 줄로 보여 줄 뿐 종료 코드는 바꾸지 않습니다.
 5. `SleepDisabled`가 여전히 1이면 다른 도구가 설정한 것입니다. 그렇다고 알려 주고 건드리지 않습니다
@@ -245,8 +247,8 @@ sudoers 규칙 하나가 허용하는 정확히 두 명령만 `sudo -n`(대화 �
 | 1 | 거부: root로 실행했거나, 쓸 수 없는 사용자 이름이나 홈 |
 | 40 | 무언가 남았거나, `disablesleep 0` 되돌리기가 실패함. 위의 메시지에 무엇인지 나옵니다 |
 
-"백그라운드에서 허용"의 macOS 항목은 데몬과 함께 사라집니다. `~/.herdr/herdr-caffeinate/`는 남습니다(덮개 닫힘이 꺼져
-있으면 비어 있습니다). `rm -r ~/.herdr/herdr-caffeinate`로 지우세요.
+"백그라운드에서 허용"의 macOS 항목은 데몬과 함께 사라집니다. `~/.herdr/herdr-caffeinate/`는 남습니다(제거 프로그램이
+claim을 지우므로 비어 있습니다). `rm -r ~/.herdr/herdr-caffeinate`로 지우세요.
 
 ## 명령
 
@@ -296,7 +298,7 @@ sudoers 규칙 하나가 허용하는 정확히 두 명령만 `sudo -n`(대화 �
 | `fake` | 없음 | `debug: true`일 때만. `{ "ac", "percent", "thermal", "lidClosed" }`가 Mac에서 읽은 값을 대신합니다. 안전 규칙을 시험할 때 씁니다 |
 
 같은 폴더에 모드가 쓰는 파일이 둘 더 있습니다. `runtime.json`(돌고 있는 세션과 끝날 시각, 프로세스의 pid와 명령, 전원
-어댑터 트리거의 상태)과 `state.json`(아래 공유 상태의 사본, 스크립트용:
+어댑터 트리거의 상태, `toggle`이 돌아갈 마지막 켬/에이전트 모드)과 `state.json`(아래 공유 상태의 사본, 스크립트용:
 `jq . ~/.config/herdr-app/data/herdr-caffeinate/state.json`)입니다.
 
 다른 모드는 공유 키 `herdr-caffeinate.state`를 읽습니다.
@@ -393,7 +395,7 @@ sudoers 규칙 하나가 허용하는 정확히 두 명령만 `sudo -n`(대화 �
   `uninstall.sh`)를 실행하는 Herdr 탭(`tab.new`)을 엽니다.
 
 **설치·제거 프로그램**(그 탭에서 내 계정으로): `/usr/bin/id`, `/usr/bin/stat`, `/usr/bin/mktemp`, `/usr/bin/sed`(템플릿
-채우기), `/usr/sbin/visudo -cf`(채운 임시 파일), `/usr/bin/plutil -lint`, `/bin/date`, `/bin/sleep`, `/bin/rm`(임시 폴더),
+채우기), `/usr/sbin/visudo -cf`(채운 임시 파일), `/usr/bin/plutil -lint`, `/bin/date`, `/bin/sleep`, `/bin/rm`(임시 폴더, 제거 프로그램에서는 `~/.herdr/herdr-caffeinate/claim`도),
 `/usr/bin/pmset -g`(`SleepDisabled` 읽기), `/bin/launchctl print`(데몬이 사라졌는지), 그리고 `/usr/bin/sudo`를 통해
 `/usr/bin/install`(root 파일마다 소유자와 권한을 지정), `/bin/mv`, `/usr/sbin/visudo -cf /etc/sudoers.d/herdr-caffeinate`
 (설치한 우리 파일), `-n -l /usr/bin/pmset -a disablesleep 0`과 `… 1`(sudo가 규칙을 허용하는지, 아무것도 실행하지 않음),

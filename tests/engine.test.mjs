@@ -151,7 +151,13 @@ class FakeMac {
     // Host calls run now (their effects happen) and deliver their result to the calling copy later, or never once it
     // closed. `hang(command, args)` true: that call never answers.
     this.hang = () => false;
-    this.readTextFile = (path) => this.deliver(() => this.files.get(path)?.text ?? null);
+    // How long every host call takes on the clock (0: its result arrives at the same time), and reads per path.
+    this.callMs = 0;
+    this.reads = new Map();
+    this.readTextFile = (path) => {
+      this.reads.set(path, (this.reads.get(path) ?? 0) + 1);
+      return this.deliver(() => this.files.get(path)?.text ?? null);
+    };
     this.writeTextFile = (path, text, expected) => this.deliver(() => {
       if ((this.files.get(path)?.text ?? null) !== expected) throw new Error('stale snapshot');
       this.files.set(path, { text, mtime: this.clock.t });
@@ -168,7 +174,7 @@ class FakeMac {
     } catch (e) {
       error = e;
     }
-    return new Promise((resolve, reject) => this.clock.schedule(0, () => (error ? reject(error) : resolve(result))));
+    return new Promise((resolve, reject) => this.clock.schedule(this.callMs, () => (error ? reject(error) : resolve(result))));
   }
 
   get nowSec() {
@@ -526,6 +532,29 @@ test('agent mode holds while a local agent works and releases lingerSec after it
   assert.equal(w.c3().active, false);
 });
 
+test('agent mode with lingerSec 0 while an agent works sleeps between cycles; the holder ends as soon as it stops', async () => {
+  const w = world({ settings: { mode: 'agent', agent: { lingerSec: 0 } } });
+  // Every host call takes 5 ms, so a step runs (and stamps the working time) later than its cycle started.
+  w.mac.callMs = 5;
+  w.mac.terminals = [{ address: 't1', status: 'working', state: 'live' }];
+  await w.attach('host');
+  await w.clock.advance(1000);
+  assert.deepEqual(holderCommands(w), [HOLDER]);
+  // A cycle reads settings.json once; in a minute only the 30 s session ticks (and pokes) run one.
+  const cycles = () => w.mac.reads.get(settingsPath(APP)) ?? 0;
+  const before = cycles();
+  w.engine.poke();
+  await w.clock.advance(60000);
+  assert.ok(cycles() - before <= 5, `${cycles() - before} cycles in a minute`);
+  assert.deepEqual(holderCommands(w), [HOLDER]);
+
+  w.mac.terminals = [{ address: 't1', status: 'idle', state: 'live' }];
+  w.engine.poke();
+  await w.clock.advance(1000);
+  assert.deepEqual(holderCommands(w), []);
+  assert.equal(w.c3().active, false);
+});
+
 test('workingAgents counts live working terminals, local unless includeRemote', () => {
   const list = [
     { address: 't1', status: 'working', state: 'live' },
@@ -635,6 +664,44 @@ test('F2: a menu copy that opens and closes mid-request never strands the engine
   await w.clock.advance(TICK_MS);
   assert.deepEqual([w.c3().mode, w.c3().reason, w.c3().active], ['on', 'trigger', true]);
   assert.deepEqual(holderCommands(w), [`/usr/bin/caffeinate -i -s -d -w ${HERDR}`]);
+});
+
+test('a command halted after its reducer step is not applied again by the next run (a toggle stays toggled once)', async () => {
+  const w = world({ settings: { mode: 'on' } });
+  const host = await w.attach('host');
+  assert.deepEqual(holderCommands(w), [HOLDER]);
+  // The launch of the new holder with -d never answers: the step has already written display: true.
+  let stuck = true;
+  w.mac.hang = (command, args) => {
+    if (!stuck || args[1] !== DETACH) return false;
+    stuck = false;
+    return true;
+  };
+  const done = w.within(host, () => w.engine.command(host.copy, 'display:toggle'));
+  await w.clock.advance(STALL_MS + 2 * COPY_CHECK_MS + 1000);
+  assert.ok(w.logs.some((l) => l.includes('no progress')), 'the stuck run was replaced');
+  assert.deepEqual(await w.until(done), { command: 'display', value: 'toggle' });
+  assert.equal(w.settings().display, true, 'toggled once');
+  assert.equal(w.c3().display, true);
+  assert.deepEqual(holderCommands(w), [`/usr/bin/caffeinate -i -s -d -w ${HERDR}`]);
+});
+
+test('a timer command halted after its step keeps its session: the next run resumes it from runtime.json', async () => {
+  const w = world();
+  const host = await w.attach('host');
+  let stuck = true;
+  w.mac.hang = (command, args) => {
+    if (!stuck || args[1] !== DETACH) return false;
+    stuck = false;
+    return true;
+  };
+  const done = w.within(host, () => w.engine.command(host.copy, 'timer:30'));
+  await w.clock.advance(STALL_MS + 2 * COPY_CHECK_MS + 1000);
+  assert.deepEqual(await w.until(done), { command: 'timer', value: 30 });
+  assert.equal(w.runtime().session.mode, 'timer');
+  assert.equal(w.c3().mode, 'timer');
+  assert.equal(holderCommands(w).length, 1);
+  assert.match(holderCommands(w)[0], new RegExp(`^${HOLDER} -t \\d+$`));
 });
 
 test('a run stuck on a host call that never answers is replaced by the host check; its queued command still runs', async () => {

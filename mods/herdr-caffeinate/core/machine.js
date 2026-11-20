@@ -37,8 +37,8 @@ export function initialState(runtime = null) {
     // settings.mode as last applied; null until the first step resumes it.
     savedMode: null,
     session: r.session,
-    // The mode `toggle` turns on.
-    lastMode: r.session && r.session.mode !== "timer" ? r.session.mode : "on",
+    // The mode `toggle` turns on, kept in runtime.json (a file from before it was kept: the session's mode, else On).
+    lastMode: r.lastMode ?? (r.session && r.session.mode !== "timer" ? r.session.mode : "on"),
     trigger: r.trigger,
     agent: { lastWorkingAt: null },
     safety: { battery: false, thermal: false, thermalOk: 0, unreadable: 0 },

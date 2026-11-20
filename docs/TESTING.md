@@ -65,7 +65,9 @@ fake `sudo`, `visudo`, `launchctl` and `install`: after installing, our file is 
 and with `sudo -n -l /usr/bin/pmset -a disablesleep 0` and `… 1`; a foreign file that fails the whole-config
 `visudo -c` (Amphetamine's `amphetamine_PowerProtect: bad permissions, should be mode 0440`) is printed as a `note:`
 line and fails neither the install nor the uninstall; our file failing `visudo -cf`, or `sudo -n -l` refusing either
-command, exits 10 and removes only our file; the uninstaller exits 40 when the daemon or our sudoers file is left.
+command, exits 10 and removes only our file; the uninstaller exits 40 when the daemon or our sudoers file is left or the
+claim cannot be removed; uninstall removes the claim (a symlink itself, not its target), so a reinstalled watchdog never
+turns off a foreign `disablesleep 1`.
 
 ### AT-22 Documentation lists programs and privilege (A16)
 
