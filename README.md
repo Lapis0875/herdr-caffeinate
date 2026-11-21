@@ -468,6 +468,14 @@ notes and how to report a problem.
   with the mod's engine. If Herdr hangs (for example `kill -STOP`) while closed-lid is on and the lid is shut on the
   power adapter, the fail-safe turns sleep back on and runs `pmset sleepnow`, but the holder's `PreventSystemSleep`
   turns that sleep into a dark wake until Herdr resumes (the mod then stops the holder) or exits.
+- **Turning closed-lid back on within 15 s of turning it off** leaves a window of a few milliseconds, between removing
+  `released` and writing the claim, in which the fail-safe can take the claim as lost. It then writes `last-restore` (and
+  runs `pmset sleepnow` if the lid is shut and macOS would sleep on a closed lid), and a `disablesleep 0` you set by hand
+  later may be taken for the fail-safe's, so the mod turns closed-lid on once more.
+- **If that re-engage cannot write the claim** and another tool sets `disablesleep 1` before the next fail-safe run (at
+  most 15 s later), the fail-safe turns that setting off.
+- **Right after the Mac wakes, the fail-safe can look missing.** launchd skips its 15 s runs while the Mac sleeps, so
+  its heartbeat can read as too old and the menu may briefly show "Fail-safe not running"; it recovers within one run.
 - **Local only.** Remote Herdr machines are not kept awake; their agents count for Agent mode only with
   `agent.includeRemote`.
 - **Commands need a shown copy.** `herdr-app do herdr-caffeinate.*` fails while no chip, lazuli host or menu is shown.
