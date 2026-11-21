@@ -83,9 +83,11 @@ The mod itself needs nothing else: every program it runs ships with macOS
 Paths below assume the Herdr app's home is `~/.config/herdr-app` (`HERDR_APP_HOME` otherwise). The name is fixed: the
 mod must be `mods/herdr-caffeinate`.
 
-1. In a copy of this repository, make sure nothing is overwritten:
+1. Clone this repository and make sure nothing is overwritten:
 
    ```sh
+   git clone https://github.com/Lapis0875/herdr-caffeinate.git
+   cd herdr-caffeinate
    APP=~/.config/herdr-app
    [ -e "$APP/mods/herdr-caffeinate" ] && echo "already there: $APP/mods/herdr-caffeinate"
    ```

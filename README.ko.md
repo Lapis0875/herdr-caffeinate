@@ -80,9 +80,11 @@ Mac이 잠들 수 없는 상태로 남는 일은 없습니다.
 아래 경로는 Herdr 앱 홈이 `~/.config/herdr-app`이라고 가정합니다(아니면 `HERDR_APP_HOME`). 이름은 바꿀 수 없습니다. 모드는
 반드시 `mods/herdr-caffeinate`에 있어야 합니다.
 
-1. 이 저장소의 사본에서, 덮어쓸 것이 없는지 확인합니다.
+1. 이 저장소를 클론하고, 덮어쓸 것이 없는지 확인합니다.
 
    ```sh
+   git clone https://github.com/Lapis0875/herdr-caffeinate.git
+   cd herdr-caffeinate
    APP=~/.config/herdr-app
    [ -e "$APP/mods/herdr-caffeinate" ] && echo "already there: $APP/mods/herdr-caffeinate"
    ```

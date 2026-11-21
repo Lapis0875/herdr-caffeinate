@@ -6,9 +6,10 @@ Security fixes go into the latest minor release only. Today that is **0.1.x**.
 
 ## Reporting a vulnerability
 
-Report it privately to the maintainer, Lapis0875: through GitHub's private vulnerability reporting on the repository's
-page (**Security → Report a vulnerability**) once it is published, or directly to @Lapis0875 on GitHub. Please do not
-open a public issue, pull request or discussion for it.
+Report it privately to the maintainer, Lapis0875: through GitHub's private vulnerability reporting on
+[the repository's page](https://github.com/Lapis0875/herdr-caffeinate/security/advisories/new) (**Security → Report a
+vulnerability**), or directly to @Lapis0875 on GitHub. Please do not open a public issue, pull request or discussion for
+it.
 
 Useful in a report:
 

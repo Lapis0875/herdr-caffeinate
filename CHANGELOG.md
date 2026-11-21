@@ -4,7 +4,7 @@ All notable changes to herdr-caffeinate are listed here. The format follows
 [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [0.1.0] - 2026-11-20
+## [0.1.0] - 2026-11-21
 
 The first version.
 
@@ -23,7 +23,9 @@ The first version.
   a thermal block at serious or worse, a block after three unreadable power reads, one Herdr per user, and
   `pmset sleepnow` when closed-lid ends while the lid is shut.
 - The root fail-safe: a LaunchDaemon (`io.github.lapis0875.herdr-caffeinate.failsafe`, every 15 s) that restores
-  `disablesleep 0` when the claim heartbeat is older than 45 s, when the claim disappears while armed, or below 10 %
+  `disablesleep 0` when the claim heartbeat is older than 45 s, when the claim disappears while armed (unless the mod
+  released closed-lid itself: it touches `~/.herdr/herdr-caffeinate/released` after its own `disablesleep 0` reads back
+  0 and removes it before the next engage, so a `disablesleep 1` another tool sets right after stays), or below 10 %
   battery while armed, with a 60 s grace after wake; it never changes a setting it did not arm.
 - `bin/install.sh` and `bin/uninstall.sh`, run in a Herdr tab from the menu: the sudoers rule, the root helper, its
   state folder and the LaunchDaemon, with checked exit codes (0, 1, 2, 10, 20, 30; uninstall 0, 1, 40).
