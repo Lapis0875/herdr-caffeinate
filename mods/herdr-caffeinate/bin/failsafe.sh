@@ -9,14 +9,23 @@
 # The claim is a file Herdr keeps touching while it holds `disablesleep 1`.
 # While the claim is fresh and SleepDisabled is 1 the watchdog arms itself.
 # It restores `pmset -a disablesleep 0` when the claim goes stale (Herdr died
-# or hangs), when the claim disappears while armed, or when an armed Mac runs
-# on battery below FLOOR %. With no claim and nothing armed it never changes
-# SleepDisabled, so a `disablesleep 1` set by another tool is left alone.
+# or hangs), when the claim disappears while armed without Herdr having
+# released it, or when an armed Mac runs on battery below FLOOR %. With no
+# claim and nothing armed it never changes SleepDisabled, so a
+# `disablesleep 1` set by another tool is left alone.
 #
-# It reads only the claim's lstat mtime, never follows or writes anything in
-# the user's home, and writes only under STATE (root-owned, world-readable):
+# `released`, next to the claim, is touched by Herdr after its own disengage
+# read back SleepDisabled 0 and before it removes the claim. With no claim, a
+# `released` at least as new as `armed` means that arm already ended
+# cleanly: the watchdog only disarms, so a foreign `disablesleep 1` set
+# before its next run is not undone.
+#
+# In the user's home it reads only the lstat mtimes of the claim and of
+# `released`, never follows a symlink there and never writes there. It writes
+# only under STATE (root-owned, world-readable):
 #   alive         touched on every run with a valid argument
-#   armed         exists while SleepDisabled 1 was seen under a fresh claim
+#   armed         exists while SleepDisabled 1 was seen under a fresh claim;
+#                 its mtime is kept newer than `released` while it is armed
 #   handled       mtime of the last stale claim already restored
 #   last-restore  "<epoch> <reason>", reason battery-floor|stale-claim|claim-gone
 #
@@ -124,6 +133,19 @@ lid_shut_and_causes_sleep() {
 	return 1
 }
 
+# released_since_armed: true when RELEASED is a regular file, not a symlink,
+# whose mtime is at least the mtime of `armed`. Reads mtimes only.
+released_since_armed() {
+	if [ -L "$RELEASED" ] || [ ! -f "$RELEASED" ]; then
+		return 1
+	fi
+	r=$(/usr/bin/stat -f %m "$RELEASED" 2>/dev/null) || return 1
+	is_uint "$r" || return 1
+	a=$(/usr/bin/stat -f %m "$STATE/armed" 2>/dev/null) || return 1
+	is_uint "$a" || return 1
+	[ "$r" -ge "$a" ]
+}
+
 # restore REASON (C7 step 5). Writes `disablesleep 0` only when SleepDisabled
 # reads 1. Fails without touching any state file when SleepDisabled cannot be
 # read or the write fails, so the next run tries again.
@@ -155,6 +177,8 @@ NAME=${NAME%/.herdr/herdr-caffeinate/claim}
 case $NAME in
 '' | .* | *..* | *[!A-Za-z0-9._-]*) exit 64 ;;
 esac
+# `released` lives in the validated claim's folder; no other input names it.
+RELEASED=${CLAIM%/claim}/released
 
 NOW=$(/bin/date +%s)
 is_uint "$NOW" || exit 1
@@ -168,10 +192,15 @@ if [ ! -L "$CLAIM" ] && [ -f "$CLAIM" ]; then
 	is_uint "$MTIME" || MTIME=
 fi
 
-# Step 4: no claim. Restore only what this watchdog armed.
+# Step 4: no claim. Restore only what this watchdog armed and Herdr did not
+# release itself; after a release, only disarm.
 if [ -z "$MTIME" ]; then
 	if [ -e "$STATE/armed" ]; then
-		restore claim-gone || exit 1
+		if released_since_armed; then
+			/bin/rm -f "$STATE/armed"
+		else
+			restore claim-gone || exit 1
+		fi
 	fi
 	exit 0
 fi
@@ -181,8 +210,13 @@ fi
 AGE=$((NOW - MTIME))
 if [ "$AGE" -ge 0 ] && [ "$AGE" -le "$STALE" ]; then
 	read_sleep_disabled
-	if [ "$SD" = 1 ] && [ ! -e "$STATE/armed" ]; then
-		: >"$STATE/armed"
+	# Arm, or re-arm: when Herdr released and engaged again before this run,
+	# `armed` is older than `released` and is touched, so that the release
+	# does not cover the new arm.
+	if [ "$SD" = 1 ]; then
+		if [ ! -e "$STATE/armed" ] || released_since_armed; then
+			/usr/bin/touch "$STATE/armed"
+		fi
 	fi
 	if [ -e "$STATE/armed" ] && battery_below_floor; then
 		restore battery-floor || exit 1

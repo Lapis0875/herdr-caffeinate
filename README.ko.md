@@ -218,6 +218,7 @@ sudoers 규칙 하나가 허용하는 정확히 두 명령만 `sudo -n`(대화 �
 |---|---|---|
 | `~/.herdr/herdr-caffeinate/` | 나, 0700 | 모드의 실행 폴더 |
 | `~/.herdr/herdr-caffeinate/claim` | 나, 0600 | 내 Herdr가 `disablesleep 1`을 쥐고 있는 동안 있는 파일. 수정 시각이 안전장치가 보는 심장 박동입니다(10초마다 갱신). 내용 `{v:1, owner:{pid, appHome}, since}`는 모드만 읽습니다 |
+| `~/.herdr/herdr-caffeinate/released` | 나, 0600 | 모드가 덮개 닫힘을 스스로 끄고 `SleepDisabled 0`을 다시 읽어 확인한 뒤, claim을 지우기 직전에 갱신하는 파일. 안전장치는 수정 시각만 읽고, 제거 프로그램이 지웁니다 |
 | `~/.herdr/herdr-caffeinate/engine` | 나, 0600 | 이 버전은 쓰지 않는 keeper 대안용 자리입니다([docs/spikes/S3.md](docs/spikes/S3.md)). 만들지 않습니다 |
 | `/etc/sudoers.d/herdr-caffeinate` | root:wheel 0440 | 위의 sudoers 규칙 |
 | `/Library/PrivilegedHelperTools/io.github.lapis0875.herdr-caffeinate.failsafe` | root:wheel 0755 | `bin/failsafe.sh`의 root 사본 |
@@ -229,13 +230,17 @@ sudoers 규칙 하나가 허용하는 정확히 두 명령만 `sudo -n`(대화 �
 메뉴에서 **제거…**를 누릅니다(또는 `herdr-app do herdr-caffeinate.uninstall`, 또는
 `/bin/sh ~/.config/herdr-app/mods/herdr-caffeinate/bin/uninstall.sh`). 내 계정으로 돌고, 단계마다 `sudo`를 씁니다.
 
-1. `~/.herdr/herdr-caffeinate/claim`이나 `/var/db/herdr-caffeinate/armed`가 있고(덮개 닫힘이 켜져 있을 수 있음)
-   `SleepDisabled`가 0이 아니면 `sudo pmset -a disablesleep 0`을 실행합니다.
+1. `~/.herdr/herdr-caffeinate/claim`이 있거나, `/var/db/herdr-caffeinate/armed`가 있는데 그보다 오래되지 않은
+   `~/.herdr/herdr-caffeinate/released`가 없고(덮개 닫힘이 켜져 있을 수 있음) `SleepDisabled`가 0이 아니면
+   `sudo pmset -a disablesleep 0`을 실행합니다. `armed`보다 오래되지 않은 `released`는 모드가 이미 스스로 잠자기를 되돌렸다는
+   뜻이므로, 지금의 `SleepDisabled 1`은 다른 도구의 것이고 그대로 둡니다.
 2. `sudo launchctl bootout system/io.github.lapis0875.herdr-caffeinate.failsafe`.
 3. plist, 도우미, `/var/db/herdr-caffeinate/`, `/etc/sudoers.d/herdr-caffeinate`를 지우고, `sudo` 없이 내 계정으로
-   `~/.herdr/herdr-caffeinate/claim` 파일 하나만 지웁니다(심볼릭 링크면 링크만 지우고 대상은 건드리지 않습니다). 남겨 두면
-   오래된 claim 때문에 다시 설치했을 때 안전장치가 다른 도구가 설정한 `disablesleep 1`을 꺼 버립니다.
-4. 데몬이 사라졌는지(`launchctl print`), `/etc/sudoers.d/herdr-caffeinate`와 claim을 포함해 남은 경로가 없는지 확인합니다.
+   `~/.herdr/herdr-caffeinate/claim`과 `~/.herdr/herdr-caffeinate/released` 두 파일만 지웁니다(심볼릭 링크면 링크만 지우고
+   대상은 건드리지 않습니다). 남겨 두면 오래된 claim 때문에 다시 설치했을 때 안전장치가 다른 도구가 설정한 `disablesleep 1`을
+   꺼 버립니다.
+4. 데몬이 사라졌는지(`launchctl print`), `/etc/sudoers.d/herdr-caffeinate`, claim, `released`를 포함해 남은 경로가 없는지
+   확인합니다.
    이어서 sudoers 파일 전체를 보는 `sudo visudo -c`를 실행하지만, 다른 앱의 sudoers 파일에 대한 내용(위의 Amphetamine
    0644 파일 등)을 `note:` 줄로 보여 줄 뿐 종료 코드는 바꾸지 않습니다.
 5. `SleepDisabled`가 여전히 1이면 다른 도구가 설정한 것입니다. 그렇다고 알려 주고 건드리지 않습니다
@@ -248,7 +253,7 @@ sudoers 규칙 하나가 허용하는 정확히 두 명령만 `sudo -n`(대화 �
 | 40 | 무언가 남았거나, `disablesleep 0` 되돌리기가 실패함. 위의 메시지에 무엇인지 나옵니다 |
 
 "백그라운드에서 허용"의 macOS 항목은 데몬과 함께 사라집니다. `~/.herdr/herdr-caffeinate/`는 남습니다(제거 프로그램이
-claim을 지우므로 비어 있습니다). `rm -r ~/.herdr/herdr-caffeinate`로 지우세요.
+claim과 `released`를 지우므로 비어 있습니다). `rm -r ~/.herdr/herdr-caffeinate`로 지우세요.
 
 ## 명령
 
@@ -345,13 +350,16 @@ claim을 지우므로 비어 있습니다). `rm -r ~/.herdr/herdr-caffeinate`로
   1이면) `pmset -a disablesleep 0`을 실행합니다.
   - claim이 45초보다 오래됨(Herdr가 죽었거나 멈췄거나 `kill -STOP`으로 세워짐): 마지막 심장 박동 뒤 60초쯤 안에 잠자기가
     돌아옵니다. 깨어난 직후 60초 동안은 기다려서, 막 깨어난 Mac이 Herdr가 따라잡기 전에 끊기지 않게 합니다.
-  - 대기 상태에서 claim이 사라짐.
+  - 대기 상태에서 claim이 사라짐. 모드가 스스로 덮개 닫힘을 끈 경우는 아닙니다. 모드는 자기 `disablesleep 0`을 다시 읽어
+    확인한 뒤 `~/.herdr/herdr-caffeinate/released`를 갱신하고, 대기 상태보다 오래되지 않은 `released`가 있으면 안전장치는
+    대기 상태만 풉니다.
   - 대기 상태에서 Mac이 배터리로 작동 중이고 **10%** 아래임. Herdr가 멈춰 있어도 그렇습니다.
 
   덮개가 닫혀 있고 macOS가 덮개를 닫으면 잠드는 상태라면 `pmset sleepnow`도 실행합니다. 시각과 이유(`stale-claim`,
   `claim-gone`, `battery-floor`)를 `/var/db/herdr-caffeinate/last-restore`에 씁니다.
-- **다른 도구의 설정은 건드리지 않습니다.** claim도 없고 대기 상태도 아니면 안전장치는 `SleepDisabled`를 절대 바꾸지
-  않습니다. 다른 도구가 이미 1로 해 두었으면 모드도 설정하지 않고 "다른 앱이 설정함"으로 표시합니다.
+- **다른 도구의 설정은 건드리지 않습니다.** claim도 없고 대기 상태도 아니거나, claim 없이 모드가 스스로 덮개 닫힘을 푼
+  뒤라면 안전장치는 `SleepDisabled`를 절대 바꾸지 않습니다. 그래서 덮개 닫힘을 끈 직후 다른 도구가 설정한 1도 그대로
+  남습니다. 다른 도구가 이미 1로 해 두었으면 모드도 설정하지 않고 "다른 앱이 설정함"으로 표시합니다.
 - **Herdr 밖에서 잠자기를 다시 켠 경우.** 덮개 닫힘이 켜져 있는데 안전장치가 아닌 다른 곳에서 `SleepDisabled`가 0으로
   돌아오면(예: 터미널에서 `sudo pmset -a disablesleep 0`) 모드는 덮개 닫힘 설정을 끄고 알려 줍니다. 안전장치가 되돌렸고
   조건이 여전히 맞으면 덮개 닫힘을 한 번 다시 켜고 알려 줍니다. 두 번째는 사용자가 끈 것으로 봅니다.
@@ -389,30 +397,31 @@ claim을 지우므로 비어 있습니다). `rm -r ~/.herdr/herdr-caffeinate`로
   `/usr/bin/stat -f %m`(`alive`, claim, `last-restore`의 시각)과 `/bin/date +%s`.
 - claim은 앱 홈 밖이라 `exec`로만 쓸 수 있습니다: `/bin/sh -c 'umask 077; /bin/mkdir -p … && /bin/chmod 700 … &&
   printf … > claim.tmp && /bin/mv -f claim.tmp claim'`(이름 바꾸기로 쓰므로 심볼릭 링크를 따라가지 않고 바꿔 놓습니다),
-  `/usr/bin/touch -c <claim>`(심장 박동, 파일을 새로 만들지는 않음), `/bin/rm -f <claim>`.
+  `/usr/bin/touch -c <claim>`(심장 박동, 파일을 새로 만들지는 않음), `/bin/rm -f <claim>`. claim을 지우기 전, 자기
+  `disablesleep 0`을 다시 읽어 0으로 확인했으면 `/bin/sh -c 'umask 077; /usr/bin/touch "$1"' sh ~/.herdr/herdr-caffeinate/released`.
 - `/usr/bin/defaults read -g AppleLanguages`: 시스템 언어, 엔진이 시작할 때 한 번.
 - 설치…와 제거…는 `/bin/sh -c '/bin/sh "$1"; …; read _' sh <앱 홈>/mods/herdr-caffeinate/bin/install.sh`(또는
   `uninstall.sh`)를 실행하는 Herdr 탭(`tab.new`)을 엽니다.
 
 **설치·제거 프로그램**(그 탭에서 내 계정으로): `/usr/bin/id`, `/usr/bin/stat`, `/usr/bin/mktemp`, `/usr/bin/sed`(템플릿
-채우기), `/usr/sbin/visudo -cf`(채운 임시 파일), `/usr/bin/plutil -lint`, `/bin/date`, `/bin/sleep`, `/bin/rm`(임시 폴더, 제거 프로그램에서는 `~/.herdr/herdr-caffeinate/claim`도),
+채우기), `/usr/sbin/visudo -cf`(채운 임시 파일), `/usr/bin/plutil -lint`, `/bin/date`, `/bin/sleep`, `/bin/rm`(임시 폴더, 제거 프로그램에서는 `~/.herdr/herdr-caffeinate/claim`과 `released`도),
 `/usr/bin/pmset -g`(`SleepDisabled` 읽기), `/bin/launchctl print`(데몬이 사라졌는지), 그리고 `/usr/bin/sudo`를 통해
 `/usr/bin/install`(root 파일마다 소유자와 권한을 지정), `/bin/mv`, `/usr/sbin/visudo -cf /etc/sudoers.d/herdr-caffeinate`
 (설치한 우리 파일), `-n -l /usr/bin/pmset -a disablesleep 0`과 `… 1`(sudo가 규칙을 허용하는지, 아무것도 실행하지 않음),
 `-n /usr/sbin/visudo -c`(sudoers 파일 전체, 알림용), `/bin/rm`, `/bin/launchctl bootout`, `/bin/launchctl enable`,
 `/bin/launchctl bootstrap system`, 제거 프로그램에서는 `/usr/bin/pmset -a disablesleep 0`.
 
-**안전장치**(root, launchd가 15초마다 실행, 고정된 `PATH`): `/bin/date +%s`, `/usr/bin/touch`(`alive`),
-`/usr/bin/stat -f %m`(claim의 시각, 심볼릭 링크를 따라가지 않음), `/usr/bin/pmset -g`, `/usr/bin/pmset -g batt`,
+**안전장치**(root, launchd가 15초마다 실행, 고정된 `PATH`): `/bin/date +%s`, `/usr/bin/touch`(`alive`, `armed`),
+`/usr/bin/stat -f %m`(claim, `released`, `armed`의 시각, 심볼릭 링크를 따라가지 않음), `/usr/bin/pmset -g`, `/usr/bin/pmset -g batt`,
 `/usr/sbin/sysctl -n kern.waketime`(마지막으로 깨어난 시각), `/usr/sbin/ioreg -r -k AppleClamshellState -d 1`, 되돌릴 때
 `/usr/bin/pmset -a disablesleep 0`, `/bin/rm -f`(`armed`), `/usr/bin/pmset sleepnow`.
 
 **읽는 것**(자기 폴더 밖): claim의 내용(`~/.herdr/herdr-caffeinate/claim`, 모드만 읽음), `/var/db/herdr-caffeinate/alive`와
-`last-restore`의 시각, 에이전트 상태를 알기 위한 Herdr 터미널 목록. 안전장치는 claim의 수정 시각만 읽고 내용은 읽지
-않으며, 심볼릭 링크가 아닌 일반 파일일 때만 읽습니다.
+`last-restore`의 시각, 에이전트 상태를 알기 위한 Herdr 터미널 목록. 안전장치는 claim과 `released`의 수정 시각만 읽고
+내용은 읽지 않으며, 각각 심볼릭 링크가 아닌 일반 파일일 때만 읽습니다.
 
 **쓰는 것:** Herdr 앱 홈의 `data/herdr-caffeinate/{settings,runtime,state}.json`, 공유 키 `herdr-caffeinate.state`,
-`~/.herdr/herdr-caffeinate/`의 claim, 시스템 설정 `disablesleep`. 설치 프로그램은 [위 표](#herdr-앱-홈-밖의-파일)의 root
+`~/.herdr/herdr-caffeinate/`의 claim과 `released`, 시스템 설정 `disablesleep`. 설치 프로그램은 [위 표](#herdr-앱-홈-밖의-파일)의 root
 경로를 씁니다(잠깐 `/etc/sudoers.d/herdr-caffeinate.new`와 임시 폴더도). 안전장치는 `/var/db/herdr-caffeinate/` 아래에만
 씁니다.
 
@@ -422,8 +431,9 @@ claim을 지우므로 비어 있습니다). `rm -r ~/.herdr/herdr-caffeinate`로
 
 sudoers 규칙은 Herdr만이 아니라 내 계정으로 도는 모든 프로세스가 `pmset -a disablesleep` 두 명령을 암호 없이 실행하게
 합니다. 덮개를 닫아도 Mac이 잠들지 않게 하거나, 그 설정을 끌 수 있다는 뜻입니다. 그 밖에는 아무것도 허용하지 않습니다.
-root 안전장치는 검사를 통과한 경로 하나의 수정 시각만 읽고, 심볼릭 링크를 따라가지 않으며, 내 홈에는 아무것도 쓰지 않고,
-잠자기를 다시 켜는 일만 할 수 있습니다. 위협 모델과 문제 신고 방법은 [SECURITY.md](SECURITY.md)(영어)에 있습니다.
+root 안전장치는 검사를 통과한 폴더 하나에 있는 claim과 `released`의 수정 시각만 읽고, 심볼릭 링크를 따라가지 않으며, 내
+홈에는 아무것도 쓰지 않고, 잠자기를 다시 켜는 일만 할 수 있습니다. 위협 모델과 문제 신고 방법은
+[SECURITY.md](SECURITY.md)(영어)에 있습니다.
 
 ## 한계
 

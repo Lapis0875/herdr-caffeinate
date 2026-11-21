@@ -2,7 +2,7 @@
 // temporary copy whose tools are fakes (tests/helpers/sandbox.mjs).
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {access, constants, lutimes, mkdir, readdir, readFile, symlink, utimes, writeFile} from 'node:fs/promises';
+import {access, constants, lutimes, mkdir, readdir, readFile, rm, stat, symlink, utimes, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {BIN, clearCalls, copyBin, makeSandbox, readCalls, run, setWorld, writeFakes} from './helpers/sandbox.mjs';
 import {absoluteTools, bareTools, shellCode, sourcesCode} from './helpers/shell-scan.mjs';
@@ -45,14 +45,18 @@ const lid = (state, causesSleep) => [
 const wake = (sec) => `{ sec = ${sec}, usec = 792285 } Thu Nov 19 22:28:10 2026\n`;
 
 const CLAIM_REL = 'Users/tester/.herdr/herdr-caffeinate/claim';
-const MTIME = {fresh: NOW - 10, stale: NOW - 100, future: NOW + 3600};
+const MTIME = {fresh: NOW - 10, stale: NOW - 100, future: NOW + 3600, armed: NOW - 50};
+// `released` mtimes relative to `armed`.
+const RELEASED_AT = {newer: NOW - 20, equal: MTIME.armed, older: NOW - 80};
 
 // A watchdog copy in a sandbox: `opts` sets what the fakes report, the claim
-// (none | fresh | stale | future | symlink | dir) and state files.
+// (none | fresh | stale | future | symlink | dir), `released` next to it
+// (null | newer | equal | older | symlink | dir; symlink points at a file
+// newer than `armed`) and state files (`armed` has mtime MTIME.armed).
 async function watchdog(t, shell, opts = {}) {
   const {
     sd = '0', batt = AC, ioreg = lid('No', 'Yes'), waketime = wake(NOW - 3600), claim = 'fresh',
-    armed = false, handled, pmsetWriteFails = false,
+    armed = false, handled, pmsetWriteFails = false, released = null,
   } = opts;
   const sb = await makeSandbox('hc-failsafe-');
   t.after(sb.cleanup);
@@ -70,7 +74,10 @@ async function watchdog(t, shell, opts = {}) {
   });
   const state = join(sb.root, 'var/db/herdr-caffeinate');
   await mkdir(state, {recursive: true});
-  if (armed) await writeFile(join(state, 'armed'), '');
+  if (armed) {
+    await writeFile(join(state, 'armed'), '');
+    await utimes(join(state, 'armed'), MTIME.armed, MTIME.armed);
+  }
   if (handled !== undefined) await writeFile(join(state, 'handled'), handled);
   const claimPath = join(sb.root, CLAIM_REL);
   await mkdir(join(claimPath, '..'), {recursive: true});
@@ -86,9 +93,23 @@ async function watchdog(t, shell, opts = {}) {
     await writeFile(claimPath, '{}');
     await utimes(claimPath, MTIME[claim], MTIME[claim]);
   }
+  const releasedPath = join(claimPath, '../released');
+  if (released === 'symlink') {
+    const target = join(claimPath, '../released-target');
+    await writeFile(target, '');
+    await utimes(target, RELEASED_AT.newer, RELEASED_AT.newer);
+    await symlink(target, releasedPath);
+    await lutimes(releasedPath, RELEASED_AT.newer, RELEASED_AT.newer);
+  } else if (released === 'dir') {
+    await mkdir(releasedPath);
+  } else if (released !== null) {
+    await writeFile(releasedPath, '');
+    await utimes(releasedPath, RELEASED_AT[released], RELEASED_AT[released]);
+  }
   return {
     sb,
     claimPath,
+    releasedPath,
     async run(args = [claimPath]) {
       await clearCalls(sb);
       const result = await run([shell, script, ...args]);
@@ -105,6 +126,10 @@ async function watchdog(t, shell, opts = {}) {
         if (error.code === 'ENOENT') return null;
         throw error;
       }
+    },
+    // mtime in whole seconds of a state file.
+    async mtime(name) {
+      return Math.floor((await stat(join(state, name))).mtimeMs / 1000);
     },
     world: (files) => setWorld(sb, files),
   };
@@ -195,6 +220,66 @@ for (const shell of SHELLS) {
     await w.world({sd: '1\n'});
     const second = await w.run();
     assert.deepEqual(second.writes, []);
+  });
+
+  test(`[${shell}] AT-09 race: released at least as new as armed only disarms; a foreign SleepDisabled 1 stays`, async (t) => {
+    for (const released of ['newer', 'equal']) {
+      const w = await watchdog(t, shell, {claim: 'none', sd: '1', armed: true, released});
+      const first = await w.run();
+      assert.equal(first.code, 0, `${released}: ${first.stderr}`);
+      assert.deepEqual(first.writes, [], released);
+      assert.deepEqual(await w.files(), ['alive'], released);
+      // Only the mtime of `released` is read; it is not changed.
+      const reads = first.calls.filter((call) => call.includes('/released'));
+      assert.deepEqual(reads, ['stat -f %m /Users/tester/.herdr/herdr-caffeinate/released'], released);
+      assert.equal(Math.floor((await stat(w.releasedPath)).mtimeMs / 1000), RELEASED_AT[released], released);
+      const second = await w.run();
+      assert.deepEqual(second.writes, [], released);
+      assert.deepEqual(await w.files(), ['alive'], released);
+    }
+  });
+
+  test(`[${shell}] released older than armed, symlinked or not a file: restore claim-gone`, async (t) => {
+    for (const released of ['older', 'symlink', 'dir']) {
+      const w = await watchdog(t, shell, {claim: 'none', sd: '1', armed: true, released});
+      const r = await w.run();
+      assert.equal(r.code, 0, `${released}: ${r.stderr}`);
+      assert.deepEqual(r.writes, RESTORE, released);
+      assert.equal(await w.read('last-restore'), `${NOW} claim-gone\n`, released);
+      assert.deepEqual(await w.files(), ['alive', 'last-restore'], released);
+      if (released === 'symlink') {
+        assert.deepEqual(r.calls.filter((call) => call.includes('/released')), [], 'a symlinked released is not even read');
+      }
+    }
+  });
+
+  test(`[${shell}] released without armed writes nothing`, async (t) => {
+    const w = await watchdog(t, shell, {claim: 'none', sd: '1', released: 'newer'});
+    const r = await w.run();
+    assert.equal(r.code, 0, r.stderr);
+    assert.deepEqual(r.writes, []);
+    assert.deepEqual(await w.files(), ['alive']);
+  });
+
+  test(`[${shell}] a new arm after a release refreshes armed, so a later claim loss still restores`, async (t) => {
+    const w = await watchdog(t, shell, {claim: 'fresh', sd: '1', armed: true, released: 'newer'});
+    const armedAgain = await w.run();
+    assert.equal(armedAgain.code, 0, armedAgain.stderr);
+    assert.deepEqual(armedAgain.writes, []);
+    assert.ok(await w.mtime('armed') > RELEASED_AT.newer, 'armed is newer than released again');
+    await rm(w.claimPath);
+    const lost = await w.run();
+    assert.deepEqual(lost.writes, RESTORE);
+    assert.equal(await w.read('last-restore'), `${NOW} claim-gone\n`);
+  });
+
+  test(`[${shell}] an arm newer than released is left as it is`, async (t) => {
+    for (const released of [null, 'older']) {
+      const w = await watchdog(t, shell, {claim: 'fresh', sd: '1', armed: true, released});
+      const r = await w.run();
+      assert.equal(r.code, 0, r.stderr);
+      assert.equal(await w.mtime('armed'), MTIME.armed, String(released));
+    }
   });
 
   test(`[${shell}] symlinked claim is ignored`, async (t) => {

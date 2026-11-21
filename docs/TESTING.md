@@ -52,9 +52,11 @@ lines.
 
 `node --test tests/failsafe.test.mjs` (fake `pmset`, `ioreg`, `sysctl`). Expected: a fresh claim writes nothing; a
 stale claim writes one `disablesleep 0` and a second run writes nothing; no claim and no `armed` with `SleepDisabled 1`
-writes nothing; no claim with `armed` restores; a symlinked claim is ignored; with the lid shut `sleepnow` follows the
-restore; the wake grace holds; the battery floor acts only when `armed` and below 10 %; a bad `$1` does nothing; the
-shipped file uses only absolute tool paths.
+writes nothing; no claim with `armed` restores, unless `released` is a regular file at least as new as `armed` (then
+`armed` is removed and nothing is written even with `SleepDisabled 1`, the AT-09 race); an older or symlinked
+`released` still restores; a new arm after a release refreshes `armed`; a symlinked claim is ignored; with the lid shut
+`sleepnow` follows the restore; the wake grace holds; the battery floor acts only when `armed` and below 10 %; a bad
+`$1` does nothing; the shipped file uses only absolute tool paths.
 
 ### AT-19 Installer refuses bad input (A6)
 
@@ -66,8 +68,9 @@ and with `sudo -n -l /usr/bin/pmset -a disablesleep 0` and `… 1`; a foreign fi
 `visudo -c` (Amphetamine's `amphetamine_PowerProtect: bad permissions, should be mode 0440`) is printed as a `note:`
 line and fails neither the install nor the uninstall; our file failing `visudo -cf`, or `sudo -n -l` refusing either
 command, exits 10 and removes only our file; the uninstaller exits 40 when the daemon or our sudoers file is left or the
-claim cannot be removed; uninstall removes the claim (a symlink itself, not its target), so a reinstalled watchdog never
-turns off a foreign `disablesleep 1`.
+claim or `released` cannot be removed; uninstall removes the claim and `released` (a symlink itself, not its target),
+so a reinstalled watchdog never turns off a foreign `disablesleep 1`; it restores 0 for a claim, or for `armed` without
+a `released` at least as new, and leaves a foreign 1 alone after our release.
 
 ### AT-22 Documentation lists programs and privilege (A16)
 

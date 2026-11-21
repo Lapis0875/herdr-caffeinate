@@ -26,10 +26,10 @@ rule and a root fail-safe. This section describes what each piece can do and to 
 
 | Piece | Runs as | Can do |
 |---|---|---|
-| The mod (`sys/`, `bin/probe.sh`) | you, inside Herdr | start and stop this Herdr's `caffeinate` holder; write its claim file; run the two `sudo -n` commands below; run `pmset sleepnow` |
+| The mod (`sys/`, `bin/probe.sh`) | you, inside Herdr | start and stop this Herdr's `caffeinate` holder; write its claim and `released` files; run the two `sudo -n` commands below; run `pmset sleepnow` |
 | The sudoers rule `/etc/sudoers.d/herdr-caffeinate` | root, through `sudo -n`, for your user only | `/usr/bin/pmset -a disablesleep 0` and `/usr/bin/pmset -a disablesleep 1`, nothing else |
 | The fail-safe `/Library/PrivilegedHelperTools/io.github.lapis0875.herdr-caffeinate.failsafe` | root, started by launchd every 15 s | `pmset -a disablesleep 0`, `pmset sleepnow`, files under `/var/db/herdr-caffeinate/` |
-| `bin/install.sh`, `bin/uninstall.sh` | you, with `sudo` and your admin password | create or remove the four root paths above and `/Library/LaunchDaemons/io.github.lapis0875.herdr-caffeinate.failsafe.plist`; the uninstaller also removes your `~/.herdr/herdr-caffeinate/claim` (as you, no `sudo`) |
+| `bin/install.sh`, `bin/uninstall.sh` | you, with `sudo` and your admin password | create or remove the four root paths above and `/Library/LaunchDaemons/io.github.lapis0875.herdr-caffeinate.failsafe.plist`; the uninstaller also removes your `~/.herdr/herdr-caffeinate/claim` and `released` (as you, no `sudo`) |
 
 ### The sudoers rule
 
@@ -93,29 +93,34 @@ launchd runs `/bin/sh /Library/PrivilegedHelperTools/io.github.lapis0875.herdr-c
 - **One validated path.** The argument is fixed in the root-owned plist, and the script still rejects anything but
   `/Users/<name>/.herdr/herdr-caffeinate/claim`, where `<name>` is one path segment of `[A-Za-z0-9._-]` that does not
   start with a dot and holds no `..`. A rejected argument exits 64 with nothing read or written.
-- **Only a modification time.** From your home it reads only the claim's modification time, with `stat -f %m` (no
-  `-L`), and only when the path is a regular file and not a symlink. A swap between that test and the `stat` makes it
-  read the link's own time, which is harmless. It never reads the claim's content, and never creates, writes or
-  removes anything in your home.
+- **Only modification times.** From your home it reads only the modification times of the claim and of
+  `~/.herdr/herdr-caffeinate/released` (derived from the validated claim path, never from other input), with
+  `stat -f %m` (no `-L`), and only when each path is a regular file and not a symlink. A swap between that test and the
+  `stat` makes it read the link's own time, which is harmless. It never reads their content, and never creates, writes
+  or removes anything in your home.
 - **Writes in one place.** It writes only under `/var/db/herdr-caffeinate/`: `alive`, `armed`, `handled` and
   `last-restore` (root, folder 0755, files 0644: readable by everyone, writable by root only).
 - **Fixed environment.** `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, `LC_ALL=C`, `set -u`, every tool by absolute path, no
   `eval` or `source`; numbers are checked to be digits before any arithmetic.
 - **It can only turn sleep back on.** Its only state changes are `pmset -a disablesleep 0` and `pmset sleepnow`. The
   first runs only when `SleepDisabled` reads 1 and there is a claim to answer for: a claim older than 45 s (once per
-  claim time, and not in the first 60 s after a wake), a claim gone while it is armed, or the battery below 10 % while
-  it is armed. With no claim and nothing armed it changes nothing. `sleepnow` runs after a restore only when the lid is
-  closed and macOS would sleep on a closed lid. It never sets `disablesleep 1`.
+  claim time, and not in the first 60 s after a wake), a claim gone while it is armed and not released by the mod (no
+  `released` at least as new as `armed`), or the battery below 10 % while it is armed. With no claim and nothing armed,
+  or with no claim after the mod's own release, it changes nothing (it only removes `armed`). `sleepnow` runs after a
+  restore only when the lid is closed and macOS would sleep on a closed lid. It never sets `disablesleep 1`.
 - **Fails safe.** If `SleepDisabled` cannot be read, it changes nothing and keeps its state, and the next run (15 s
   later) tries again. A claim dated in the future counts as stale. A missing or malformed wake time grants no wake
   grace.
 
-What a process running as you can do through the claim, which is your file:
+What a process running as you can do through the claim and `released`, which are your files:
 
-- keep it fresh: the fail-safe does not restore, the same outcome as running `sudo -n pmset -a disablesleep 1` itself;
-- remove it, or let it go stale, while the fail-safe is armed: the fail-safe turns sleep back on, which is the safe
-  direction;
-- create it while another tool holds `disablesleep 1`: the fail-safe arms and later sets 0, turning the other tool's
+- keep the claim fresh: the fail-safe does not restore, the same outcome as running `sudo -n pmset -a disablesleep 1`
+  itself;
+- remove the claim (without touching `released`), or let it go stale, while the fail-safe is armed: the fail-safe turns
+  sleep back on, which is the safe direction;
+- touch `released` while the fail-safe is armed, then remove the claim: the fail-safe only disarms and leaves
+  `disablesleep 1` on, the same outcome as running `sudo -n pmset -a disablesleep 1` itself;
+- create the claim while another tool holds `disablesleep 1`: the fail-safe arms and later sets 0, turning the other tool's
   setting off, the same outcome as running `sudo -n pmset -a disablesleep 0`, which the rule already allows.
 
 ### The installer and uninstaller

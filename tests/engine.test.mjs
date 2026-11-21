@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { COMMAND_WINDOW_MS, COPY_CHECK_MS, Engine, KEEP_OPEN, POKE_MS, STALL_MS, TICK_MS } from '../mods/herdr-caffeinate/sys/engine.js';
 import { DETACH, HERDR_PID, WAIT_GONE } from '../mods/herdr-caffeinate/sys/holder.js';
-import { WRITE_CLAIM } from '../mods/herdr-caffeinate/sys/closed-lid.js';
+import { TOUCH_RELEASED, WRITE_CLAIM, releasedPath } from '../mods/herdr-caffeinate/sys/closed-lid.js';
 import { SLEEP_DISABLED_SH, probeScript } from '../mods/herdr-caffeinate/sys/probe.js';
 import { workingAgents } from '../mods/herdr-caffeinate/sys/agents.js';
 import {
@@ -22,6 +22,7 @@ const HERDR = 56192;
 const HERDR_COMMAND = '/Applications/Herdr.app/Contents/MacOS/Herdr';
 const HOLDER = `/usr/bin/caffeinate -i -s -w ${HERDR}`;
 const CLAIM = claimPath(HOME);
+const RELEASED = releasedPath(HOME);
 
 // Microtasks drain fully before each setImmediate; every fake host result arrives through the clock.
 const settle = async () => {
@@ -208,6 +209,10 @@ class FakeMac {
         return ok();
       }
       if (script === WAIT_GONE) return this.procs.has(Number(args[3])) ? { code: 1, stdout: '', stderr: '' } : ok();
+      if (script === TOUCH_RELEASED) {
+        this.files.set(args[3], { text: this.files.get(args[3])?.text ?? '', mtime: this.clock.t });
+        return ok();
+      }
       throw new Error(`unexpected script ${script}`);
     }
     if (command === '/bin/sh' && args[0] === probeScript(APP)) return ok(this.probeText(args.includes('--thermal')));
@@ -267,7 +272,10 @@ class FakeMac {
 function label({ argv }) {
   const [command, ...args] = argv;
   if (command === '/bin/sh' && args[0] === '-c') {
-    return { [HERDR_PID]: 'herdr-pid', [DETACH]: 'launch', [SLEEP_DISABLED_SH]: 'readback', [WRITE_CLAIM]: 'claim:write', [WAIT_GONE]: 'wait-gone' }[args[1]] ?? 'sh';
+    return {
+      [HERDR_PID]: 'herdr-pid', [DETACH]: 'launch', [SLEEP_DISABLED_SH]: 'readback', [WRITE_CLAIM]: 'claim:write',
+      [WAIT_GONE]: 'wait-gone', [TOUCH_RELEASED]: 'released',
+    }[args[1]] ?? 'sh';
   }
   if (command === '/bin/sh') return 'probe';
   if (command === '/bin/ps') return args[0] === '-axo' ? 'ps:all' : `ps:${args[3]}`;
@@ -926,6 +934,44 @@ test('disengage: sudo -n pmset 0, read back, remove the claim; sleepnow only wit
   await w.cmd(host, 'mode:off');
   assert.deepEqual(w.labels(from).filter((l) => LID.has(l)), ['pmset:0', 'readback', 'claim:rm', 'sleepnow']);
   assert.equal(w.mac.sleepDisabled, 0);
+});
+
+test('F8: a disengage that reads back 0 touches released before removing the claim; a failed read-back does not', async () => {
+  const w = world({ settings: { mode: 'on' } });
+  const host = await w.attach('host');
+  const steps = ['pmset:0', 'readback', 'released', 'claim:rm', 'sleepnow'];
+  const order = (from) => w.labels(from).filter((l) => steps.includes(l));
+
+  await w.cmd(host, 'closed-lid:on');
+  assert.equal(w.c3().closedLid.status, 'engaged');
+  assert.equal(w.mac.files.has(RELEASED), false, 'an engage touches nothing but the claim');
+  let from = w.mark();
+  await w.cmd(host, 'closed-lid:off');
+  assert.deepEqual(order(from), ['pmset:0', 'readback', 'released', 'claim:rm']);
+  assert.equal(w.mac.files.get(RELEASED).mtime, w.clock.t);
+  assert.equal(w.mac.files.has(CLAIM), false);
+
+  // With the lid shut (D7) sleepnow comes last, after released and the claim.
+  w.mac.lidClosed = true;
+  await w.cmd(host, 'closed-lid:on');
+  assert.equal(w.c3().closedLid.status, 'engaged');
+  from = w.mark();
+  await w.cmd(host, 'mode:off');
+  assert.deepEqual(order(from), ['pmset:0', 'readback', 'released', 'claim:rm', 'sleepnow']);
+
+  // `disablesleep 0` does not take: the read-back says 1, so released stays untouched and the watchdog restores.
+  w.mac.lidClosed = false;
+  await w.cmd(host, 'mode:on');
+  await w.cmd(host, 'closed-lid:on');
+  assert.equal(w.c3().closedLid.status, 'engaged');
+  w.mac.files.delete(RELEASED);
+  w.mac.pmsetSticks = false;
+  from = w.mark();
+  await w.cmd(host, 'closed-lid:off');
+  assert.deepEqual(order(from), ['pmset:0', 'readback', 'claim:rm']);
+  assert.equal(w.mac.files.has(RELEASED), false);
+  assert.equal(w.mac.files.has(CLAIM), false);
+  assert.equal(w.mac.sleepDisabled, 1);
 });
 
 test('F4: after a disengage C3 shows the read-back (off, not external) through later steps; a foreign disablesleep 1 is still external', async () => {

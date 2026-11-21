@@ -222,6 +222,7 @@ Closed-lid needs both.
 |---|---|---|
 | `~/.herdr/herdr-caffeinate/` | you, 0700 | the mod's runtime folder |
 | `~/.herdr/herdr-caffeinate/claim` | you, 0600 | exists while your Herdr holds `disablesleep 1`; its modification time is the heartbeat the fail-safe checks (touched every 10 s); its content `{v:1, owner:{pid, appHome}, since}` is read only by the mod |
+| `~/.herdr/herdr-caffeinate/released` | you, 0600 | touched by the mod after its own closed-lid off read back `SleepDisabled 0`, just before it removes the claim; the fail-safe reads only its modification time; the uninstaller removes it |
 | `~/.herdr/herdr-caffeinate/engine` | you, 0600 | reserved for a keeper fallback that this version does not use ([docs/spikes/S3.md](docs/spikes/S3.md)); never created |
 | `/etc/sudoers.d/herdr-caffeinate` | root:wheel 0440 | the sudoers rule above |
 | `/Library/PrivilegedHelperTools/io.github.lapis0875.herdr-caffeinate.failsafe` | root:wheel 0755 | the root copy of `bin/failsafe.sh` |
@@ -233,14 +234,17 @@ Closed-lid needs both.
 Press **Uninstall…** in the menu (or `herdr-app do herdr-caffeinate.uninstall`, or
 `/bin/sh ~/.config/herdr-app/mods/herdr-caffeinate/bin/uninstall.sh`). It runs as you and uses `sudo` for each step:
 
-1. If `~/.herdr/herdr-caffeinate/claim` or `/var/db/herdr-caffeinate/armed` exists (closed-lid may be on) and
-   `SleepDisabled` does not read 0, it runs `sudo pmset -a disablesleep 0`.
+1. If `~/.herdr/herdr-caffeinate/claim` exists, or `/var/db/herdr-caffeinate/armed` exists without a
+   `~/.herdr/herdr-caffeinate/released` at least as new (closed-lid may be on), and `SleepDisabled` does not read 0, it
+   runs `sudo pmset -a disablesleep 0`. A `released` at least as new as `armed` means the mod already turned sleep back
+   on itself, so a `SleepDisabled 1` now is another tool's and stays.
 2. `sudo launchctl bootout system/io.github.lapis0875.herdr-caffeinate.failsafe`.
 3. Removes the plist, the helper, `/var/db/herdr-caffeinate/` and `/etc/sudoers.d/herdr-caffeinate`, then, as you without
-   `sudo`, `~/.herdr/herdr-caffeinate/claim` (only that file; a symlink is removed itself, never its target). Left behind,
-   that stale claim would make a later install's fail-safe turn off a `disablesleep 1` set by another tool.
-4. Checks that the daemon is gone (`launchctl print`) and that no path is left, `/etc/sudoers.d/herdr-caffeinate` and the
-   claim included. A whole-config `sudo visudo -c` follows only to print what it reports about other apps' sudoers files
+   `sudo`, `~/.herdr/herdr-caffeinate/claim` and `~/.herdr/herdr-caffeinate/released` (only those files; a symlink is
+   removed itself, never its target). Left behind, a stale claim would make a later install's fail-safe turn off a
+   `disablesleep 1` set by another tool.
+4. Checks that the daemon is gone (`launchctl print`) and that no path is left, `/etc/sudoers.d/herdr-caffeinate`, the
+   claim and `released` included. A whole-config `sudo visudo -c` follows only to print what it reports about other apps' sudoers files
    as `note:` lines (such as Amphetamine's 0644 file above); it never changes the exit code.
 5. If `SleepDisabled` still reads 1, another tool set it; it says so and leaves it (`sudo pmset -a disablesleep 0`
    clears it).
@@ -252,7 +256,7 @@ Press **Uninstall…** in the menu (or `herdr-app do herdr-caffeinate.uninstall`
 | 40 | something is left, or the `disablesleep 0` restore failed; the messages above say what |
 
 The macOS item under "Allow in the Background" goes away with the daemon. `~/.herdr/herdr-caffeinate/` stays (empty
-once the uninstaller has removed the claim); remove it with `rm -r ~/.herdr/herdr-caffeinate`.
+once the uninstaller has removed the claim and `released`); remove it with `rm -r ~/.herdr/herdr-caffeinate`.
 
 ## Commands
 
@@ -353,14 +357,17 @@ While closed-lid is On, the mod checks every 10 s. The thermal state is read onl
   - the claim is older than 45 s (Herdr died, hung or was stopped with `kill -STOP`): sleep is back within about 60 s
     of the last heartbeat. In the first 60 s after a wake it waits, so a Mac that just woke is not cut off before Herdr
     catches up;
-  - the claim disappears while it is armed;
+  - the claim disappears while it is armed, unless the mod turned closed-lid off itself: the mod touches
+    `~/.herdr/herdr-caffeinate/released` after its own `disablesleep 0` reads back, and a `released` at least as new as
+    the arm only disarms the fail-safe;
   - it is armed and the Mac runs on battery below **10 %**, even if Herdr is frozen.
 
   If the lid is shut and macOS would sleep on a closed lid, it also runs `pmset sleepnow`. It writes the time and
   reason to `/var/db/herdr-caffeinate/last-restore` (`stale-claim`, `claim-gone` or `battery-floor`).
-- **Another tool's setting is left alone.** With no claim and nothing armed, the fail-safe never changes
-  `SleepDisabled`, and the mod never sets it while another tool already has it at 1: the status shows Set by another
-  app.
+- **Another tool's setting is left alone.** With no claim and nothing armed, or with no claim after the mod released
+  closed-lid itself, the fail-safe never changes `SleepDisabled`, so a `disablesleep 1` another tool sets right after
+  closed-lid goes off stays; and the mod never sets it while another tool already has it at 1: the status shows Set by
+  another app.
 - **Sleep turned back on outside Herdr.** If `SleepDisabled` returns to 0 while closed-lid is on and the fail-safe did
   not do it (for example `sudo pmset -a disablesleep 0` in a terminal), the mod turns the closed-lid setting off and
   says so. If the fail-safe did it and the conditions still hold, the mod turns closed-lid on once more and says so; a
@@ -401,31 +408,32 @@ passed as arguments, never pasted into a shell string.
 - The claim, which only `exec` can write outside the app home: `/bin/sh -c 'umask 077; /bin/mkdir -p … &&
   /bin/chmod 700 … && printf … > claim.tmp && /bin/mv -f claim.tmp claim'` (written through a rename, which replaces a
   symlink instead of following it), `/usr/bin/touch -c <claim>` (the heartbeat; never creates it) and
-  `/bin/rm -f <claim>`.
+  `/bin/rm -f <claim>`; before that removal, after its own `disablesleep 0` read back 0,
+  `/bin/sh -c 'umask 077; /usr/bin/touch "$1"' sh ~/.herdr/herdr-caffeinate/released`.
 - `/usr/bin/defaults read -g AppleLanguages`: the system language, once per engine start.
 - Install… and Uninstall… open a Herdr tab (`tab.new`) running
   `/bin/sh -c '/bin/sh "$1"; …; read _' sh <app home>/mods/herdr-caffeinate/bin/install.sh` (or `uninstall.sh`).
 
 **The installer and uninstaller** (as you, in that tab): `/usr/bin/id`, `/usr/bin/stat`, `/usr/bin/mktemp`,
 `/usr/bin/sed` (rendering the templates), `/usr/sbin/visudo -cf` (the rendered temporary file), `/usr/bin/plutil -lint`,
-`/bin/date`, `/bin/sleep`, `/bin/rm` (its temporary folder, and in the uninstaller `~/.herdr/herdr-caffeinate/claim`), `/usr/bin/pmset -g` (reading `SleepDisabled`),
+`/bin/date`, `/bin/sleep`, `/bin/rm` (its temporary folder, and in the uninstaller `~/.herdr/herdr-caffeinate/claim` and `released`), `/usr/bin/pmset -g` (reading `SleepDisabled`),
 `/bin/launchctl print` (is the daemon gone), and through `/usr/bin/sudo`: `/usr/bin/install` (each root file with its
 owner and mode), `/bin/mv`, `/usr/sbin/visudo -cf /etc/sudoers.d/herdr-caffeinate` (our installed file),
 `-n -l /usr/bin/pmset -a disablesleep 0` and `… 1` (does sudo grant the rule; runs nothing), `-n /usr/sbin/visudo -c`
 (every sudoers file, for notes only), `/bin/rm`, `/bin/launchctl bootout`, `/bin/launchctl enable`,
 `/bin/launchctl bootstrap system`, and in the uninstaller `/usr/bin/pmset -a disablesleep 0`.
 
-**The fail-safe** (as root, run by launchd every 15 s, fixed `PATH`): `/bin/date +%s`, `/usr/bin/touch` (`alive`),
-`/usr/bin/stat -f %m` (the claim's time, without following a symlink), `/usr/bin/pmset -g`, `/usr/bin/pmset -g batt`,
+**The fail-safe** (as root, run by launchd every 15 s, fixed `PATH`): `/bin/date +%s`, `/usr/bin/touch` (`alive`, `armed`),
+`/usr/bin/stat -f %m` (the times of the claim, `released` and `armed`, without following a symlink), `/usr/bin/pmset -g`, `/usr/bin/pmset -g batt`,
 `/usr/sbin/sysctl -n kern.waketime` (the last wake), `/usr/sbin/ioreg -r -k AppleClamshellState -d 1`, and to restore:
 `/usr/bin/pmset -a disablesleep 0`, `/bin/rm -f` (`armed`), `/usr/bin/pmset sleepnow`.
 
 **Reads**, outside its own folders: the claim's content (`~/.herdr/herdr-caffeinate/claim`, by the mod only), the times
 of `/var/db/herdr-caffeinate/alive` and `last-restore`, and Herdr's terminal list for agent status. The fail-safe reads
-only the claim's modification time, never its content, and only when it is a regular file, not a symlink.
+only the modification times of the claim and of `released`, never their content, and only when each is a regular file, not a symlink.
 
 **Writes:** `data/herdr-caffeinate/{settings,runtime,state}.json` in the Herdr app's home, the shared key
-`herdr-caffeinate.state`, the claim in `~/.herdr/herdr-caffeinate/`, and the system setting `disablesleep`. The
+`herdr-caffeinate.state`, the claim and `released` in `~/.herdr/herdr-caffeinate/`, and the system setting `disablesleep`. The
 installer writes the root paths in [the table above](#files-outside-the-herdr-apps-home) (and, briefly,
 `/etc/sudoers.d/herdr-caffeinate.new` and a temporary folder); the fail-safe writes only under
 `/var/db/herdr-caffeinate/`.
@@ -436,8 +444,9 @@ installer writes the root paths in [the table above](#files-outside-the-herdr-ap
 
 The sudoers rule lets any process running as you, not only Herdr, run the two `pmset -a disablesleep` commands without
 a password: it can keep your Mac from sleeping with the lid closed, or turn that off. It allows nothing else. The root
-fail-safe reads only the modification time of one validated path, never follows symlinks, never writes in your home,
-and can only ever turn sleep back on. [SECURITY.md](SECURITY.md) has the threat notes and how to report a problem.
+fail-safe reads only the modification times of the claim and of `released`, both in one validated folder, never follows
+symlinks, never writes in your home, and can only ever turn sleep back on. [SECURITY.md](SECURITY.md) has the threat
+notes and how to report a problem.
 
 ## Limits
 

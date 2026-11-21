@@ -4,16 +4,20 @@
 # Run as yourself, not as root (Herdr runs it in a tab); it calls sudo for
 # each privileged step:
 #   /bin/sh uninstall.sh
-# 1. When Herdr's claim (~/.herdr/herdr-caffeinate/claim) or the watchdog's
-#    `armed` file exists, closed-lid may be on: restore
-#    `pmset -a disablesleep 0` unless SleepDisabled already reads 0.
+# 1. When Herdr's claim (~/.herdr/herdr-caffeinate/claim) exists, or the
+#    watchdog's `armed` file exists without a `released`
+#    (~/.herdr/herdr-caffeinate/released) at least as new, closed-lid may be
+#    on: restore `pmset -a disablesleep 0` unless SleepDisabled already reads
+#    0. A newer `released` means Herdr's own disengage already restored 0, so
+#    a `disablesleep 1` now belongs to another tool (failsafe.sh step 4).
 # 2. Stop the daemon (`launchctl bootout`).
 # 3. Remove the plist, the helper, /var/db/herdr-caffeinate and the sudoers
 #    file.
-# 4. Remove the claim (only that file; ~/.herdr/herdr-caffeinate/ stays).
-#    Left behind, it is a stale claim the next install's watchdog has not
-#    handled (`handled` goes with the state directory), so that watchdog
-#    would turn off a `disablesleep 1` set by another tool.
+# 4. Remove the claim and `released` (only those files;
+#    ~/.herdr/herdr-caffeinate/ stays). A claim left behind is a stale claim
+#    the next install's watchdog has not handled (`handled` goes with the
+#    state directory), so that watchdog would turn off a `disablesleep 1` set
+#    by another tool.
 # 5. Check that each path is gone and the daemon is not loaded.
 #    A whole-config `sudo visudo -c` runs only to print other files'
 #    findings as notes (Amphetamine's 0644 amphetamine_PowerProtect fails
@@ -113,6 +117,27 @@ read_sleep_disabled() {
 	esac
 }
 
+# is_uint VALUE: VALUE is a non-empty string of decimal digits.
+is_uint() {
+	case $1 in
+	'' | *[!0-9]*) return 1 ;;
+	esac
+	return 0
+}
+
+# released_since_armed: the same rule as failsafe.sh step 4. RELEASED is a
+# regular file, not a symlink, whose mtime is at least the mtime of `armed`.
+released_since_armed() {
+	if [ -L "$RELEASED" ] || [ ! -f "$RELEASED" ]; then
+		return 1
+	fi
+	r=$(/usr/bin/stat -f %m "$RELEASED" 2>/dev/null) || return 1
+	is_uint "$r" || return 1
+	a=$(/usr/bin/stat -f %m "$STATE/armed" 2>/dev/null) || return 1
+	is_uint "$a" || return 1
+	[ "$r" -ge "$a" ]
+}
+
 MY_UID=$(/usr/bin/id -u) || MY_UID=
 case $MY_UID in
 '' | *[!0-9]*) fail 1 'cannot read the user id' ;;
@@ -128,6 +153,7 @@ fi
 OWNER=$(/usr/bin/stat -f %u "$HOME_DIR") || OWNER=
 [ "$OWNER" = "$MY_UID" ] || fail 1 "HOME is not owned by $ME: $HOME_DIR"
 CLAIM=$HOME_DIR/.herdr/herdr-caffeinate/claim
+RELEASED=$HOME_DIR/.herdr/herdr-caffeinate/released
 
 say 'herdr-caffeinate: removing closed-lid support and the fail-safe'
 say 'sudo may ask for your admin password.'
@@ -135,8 +161,14 @@ PARTIAL=0
 RESTORE_FAILED=0
 
 # 1. Turn disablesleep off when closed-lid may be on. This reads the claim
-# before step 4 removes it.
-if [ -e "$CLAIM" ] || [ -L "$CLAIM" ] || [ -e "$STATE/armed" ]; then
+# and `released` before step 4 removes them.
+MAY_BE_ON=0
+if [ -e "$CLAIM" ] || [ -L "$CLAIM" ]; then
+	MAY_BE_ON=1
+elif [ -e "$STATE/armed" ] && ! released_since_armed; then
+	MAY_BE_ON=1
+fi
+if [ "$MAY_BE_ON" -eq 1 ]; then
 	read_sleep_disabled
 	if [ "$SD" != 0 ]; then
 		if /usr/bin/sudo /usr/bin/pmset -a disablesleep 0; then
@@ -156,14 +188,16 @@ fi
 /usr/bin/sudo /bin/rm -rf "$STATE" || PARTIAL=1
 /usr/bin/sudo /bin/rm -f "$SUDOERS" "$SUDOERS.new" || PARTIAL=1
 
-# 4. The claim, as yourself. A symlink is removed itself, never its target;
-# anything else at that path (a directory) is no claim to the watchdog and
-# is left alone.
-if [ -L "$CLAIM" ] || [ -f "$CLAIM" ]; then
-	/bin/rm -f "$CLAIM" || PARTIAL=1
-fi
+# 4. The claim and `released`, as yourself. A symlink is removed itself,
+# never its target; anything else at those paths (a directory) is not ours
+# to the watchdog and is left alone.
+for p in "$CLAIM" "$RELEASED"; do
+	if [ -L "$p" ] || [ -f "$p" ]; then
+		/bin/rm -f "$p" || PARTIAL=1
+	fi
+done
 
-# 5. Check what is left, our sudoers file and the claim included;
+# 5. Check what is left, our sudoers file, the claim and `released` included;
 # `launchctl print` needs no privilege.
 if /bin/launchctl print "system/$LABEL" >/dev/null 2>&1; then
 	warn "the daemon system/$LABEL is still loaded"
@@ -175,10 +209,12 @@ for p in "$PLIST" "$HELPER" "$STATE" "$SUDOERS" "$SUDOERS.new"; do
 		PARTIAL=1
 	fi
 done
-if [ -L "$CLAIM" ] || [ -f "$CLAIM" ]; then
-	warn "still present: $CLAIM"
-	PARTIAL=1
-fi
+for p in "$CLAIM" "$RELEASED"; do
+	if [ -L "$p" ] || [ -f "$p" ]; then
+		warn "still present: $p"
+		PARTIAL=1
+	fi
+done
 visudo_notes 'note: sudo visudo -c, which checks every sudoers file, reports the lines below about files herdr-caffeinate does not manage:'
 
 read_sleep_disabled

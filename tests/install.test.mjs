@@ -363,6 +363,23 @@ async function writeClaim(side, mtime) {
   return claim;
 }
 
+const RELEASED_REL = 'Users/tester/.herdr/herdr-caffeinate/released';
+
+async function writeReleased(side, mtime) {
+  const released = side.at(RELEASED_REL);
+  await mkdir(join(released, '..'), {recursive: true});
+  await writeFile(released, '');
+  await utimes(released, mtime, mtime);
+  return released;
+}
+
+async function writeArmed(side, mtime) {
+  const armed = side.at(`${STATE}/armed`);
+  await writeFile(armed, '');
+  await utimes(armed, mtime, mtime);
+  return armed;
+}
+
 test('uninstall restores disablesleep 0 when armed, then removes every C4 root path', async (t) => {
   const side = await installed(t);
   await writeFile(side.at(`${STATE}/armed`), '');
@@ -384,16 +401,58 @@ test('uninstall restores disablesleep 0 when armed, then removes every C4 root p
   assert.match(r.stdout, /^uninstalled$/m);
 });
 
-test('uninstall restores disablesleep 0 when only the claim exists, then removes the claim', async (t) => {
+test('uninstall restores disablesleep 0 when the claim exists, even with a released, then removes both', async (t) => {
   const side = await installed(t);
   const claim = await writeClaim(side);
+  const released = await writeReleased(side, NOW);
   await side.world({sd: '1\n'});
   const r = await side.run('uninstall.sh');
   assert.equal(r.code, 0, r.stderr);
   assert.equal(r.sudo[0], 'pmset -a disablesleep 0');
   assert.equal(await readFile(join(side.sb.world, 'sd'), 'utf8'), '0\n');
   assert.equal(await exists(claim), false, 'claim removed after the restore');
+  assert.equal(await exists(released), false, 'released removed');
   assert.equal(await exists(join(claim, '..')), true, '~/.herdr/herdr-caffeinate/ stays');
+});
+
+test('uninstall: armed with a released at least as new is our finished release; a foreign SleepDisabled 1 stays', async (t) => {
+  for (const releasedAt of [NOW - 20, NOW - 50]) {
+    const side = await installed(t);
+    await writeArmed(side, NOW - 50);
+    const released = await writeReleased(side, releasedAt);
+    await side.world({sd: '1\n'});
+    const r = await side.run('uninstall.sh');
+    assert.equal(r.code, 0, r.stderr);
+    assert.deepEqual(r.sudo.filter((call) => call.startsWith('pmset')), [], `released at ${releasedAt}`);
+    assert.equal(await readFile(join(side.sb.world, 'sd'), 'utf8'), '1\n');
+    assert.match(r.stdout, /note: SleepDisabled is still 1/);
+    assert.equal(await exists(released), false, 'released removed');
+    for (const path of ROOT_PATHS) assert.equal(await exists(side.at(path)), false, path);
+  }
+});
+
+test('uninstall restores 0 when armed has no released at least as new (older or a symlink), and removes released', async (t) => {
+  for (const kind of ['older', 'symlink']) {
+    const side = await installed(t);
+    await writeArmed(side, NOW - 50);
+    const released = side.at(RELEASED_REL);
+    const target = side.at('Users/tester/released-target');
+    if (kind === 'older') {
+      await writeReleased(side, NOW - 80);
+    } else {
+      await mkdir(join(released, '..'), {recursive: true});
+      await writeFile(target, 'x');
+      await utimes(target, NOW - 20, NOW - 20);
+      await symlink(target, released);
+    }
+    await side.world({sd: '1\n'});
+    const r = await side.run('uninstall.sh');
+    assert.equal(r.code, 0, `${kind}: ${r.stderr}`);
+    assert.equal(r.sudo[0], 'pmset -a disablesleep 0', kind);
+    assert.equal(await readFile(join(side.sb.world, 'sd'), 'utf8'), '0\n', kind);
+    assert.equal(await exists(released), false, `${kind}: released removed`);
+    if (kind === 'symlink') assert.equal(await readFile(target, 'utf8'), 'x', 'symlink target kept');
+  }
 });
 
 test('uninstall removes a stale claim, so a reinstalled watchdog leaves a foreign disablesleep 1 alone', async (t) => {
@@ -451,9 +510,10 @@ test('uninstall removes a symlinked claim itself and leaves a directory at the c
   assert.equal((await stat(dir)).isDirectory(), true, 'not a claim; left alone');
 });
 
-test('uninstall exits 40 when the claim cannot be removed', async (t) => {
+test('uninstall exits 40 when the claim or released cannot be removed', async (t) => {
   const side = await installed(t);
   const claim = await writeClaim(side);
+  await writeReleased(side, NOW);
   const folder = join(claim, '..');
   await chmod(folder, 0o500);
   let r;
@@ -464,6 +524,7 @@ test('uninstall exits 40 when the claim cannot be removed', async (t) => {
   }
   assert.equal(r.code, 40, r.stderr);
   assert.match(r.stderr, /still present: \S*\/\.herdr\/herdr-caffeinate\/claim$/m);
+  assert.match(r.stderr, /still present: \S*\/\.herdr\/herdr-caffeinate\/released$/m);
 });
 
 test('uninstall leaves a foreign SleepDisabled 1 alone and says so', async (t) => {

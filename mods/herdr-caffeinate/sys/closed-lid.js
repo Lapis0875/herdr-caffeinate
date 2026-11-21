@@ -6,7 +6,9 @@
 // Engage:    if SleepDisabled is 1 and we hold no claim → "external", touch nothing; else write the claim,
 //            `sudo -n pmset -a disablesleep 1`, read back; on failure turn it back to 0 (when the set ran), remove
 //            the claim → "unavailable".
-// Disengage: `sudo -n pmset -a disablesleep 0`, read back, remove the claim, `pmset sleepnow` when asked (D7).
+// Disengage: `sudo -n pmset -a disablesleep 0`, read back; when it reads 0, touch `released` (the watchdog then knows
+//            our own disengage restored 0 and drops its arm without touching a later foreign `disablesleep 1`, C7
+//            step 4); then remove the claim, and `pmset sleepnow` when asked (D7).
 
 import { claimPath, runtimeDir } from "../core/state.js";
 import { readSleepDisabled } from "./probe.js";
@@ -19,6 +21,12 @@ export const RM = "/bin/rm";
  *  instead of following it. Run as `exec("/bin/sh", ["-c", WRITE_CLAIM, "sh", dir, claim, text])`. */
 export const WRITE_CLAIM =
   'umask 077; /bin/mkdir -p "$1" && /bin/chmod 700 "$1" && printf "%s\\n" "$3" > "$2.tmp" && /bin/mv -f "$2.tmp" "$2"';
+
+/** `~/.herdr/herdr-caffeinate/released` (C4): its mtime tells the watchdog our disengage already restored 0. */
+export const releasedPath = (home) => `${runtimeDir(home)}/released`;
+
+/** Touches `$1` (created 0600). Run as `exec("/bin/sh", ["-c", TOUCH_RELEASED, "sh", path])`. */
+export const TOUCH_RELEASED = 'umask 077; /usr/bin/touch "$1"';
 
 const EXEC_TIMEOUT_MS = 10000;
 
@@ -60,6 +68,9 @@ export const touchClaim = (exec, home) => ok(exec, TOUCH, ["-c", claimPath(home)
 /** Removes the claim. */
 export const removeClaim = (exec, home) => ok(exec, RM, ["-f", claimPath(home)]);
 
+/** Marks our disengage as done (C4 `released`), before the claim goes. */
+export const touchReleased = (exec, home) => ok(exec, "/bin/sh", ["-c", TOUCH_RELEASED, "sh", releasedPath(home)]);
+
 /** `pmset sleepnow` (D7). */
 export const sleepNow = (exec) => ok(exec, PMSET, ["sleepnow"]);
 
@@ -76,11 +87,13 @@ export async function engage(exec, { home, text, held }) {
 }
 
 /** C11 disengage. Returns `SleepDisabled` as read back afterwards (false: restored; true or null: not), which is the
- *  engine's fact from then on. The claim is removed either way: with `disablesleep 1` left, the armed watchdog restores
- *  it (`claim-gone`). */
+ *  engine's fact from then on. Only a read-back of 0 touches `released` (before the claim goes, so the watchdog never
+ *  sees the claim gone without it). The claim is removed either way: with `disablesleep 1` left and no fresh
+ *  `released`, the armed watchdog restores it (`claim-gone`). */
 export async function disengage(exec, { home, sleep = false }) {
   await setDisableSleep(exec, false);
   const after = await readSleepDisabled(exec);
+  if (after === false) await touchReleased(exec, home);
   await removeClaim(exec, home);
   if (sleep) await sleepNow(exec);
   return after;
