@@ -3,9 +3,9 @@
 // `disablesleep 1`; its mtime is the heartbeat the root watchdog (C7) checks. `fs/promises` writes only under the
 // app home, so the claim is created, touched and removed only through `exec`.
 //
-// Engage:    if SleepDisabled is 1 and we hold no claim → "external", touch nothing; else write the claim,
-//            `sudo -n pmset -a disablesleep 1`, read back; on failure turn it back to 0 (when the set ran), remove
-//            the claim → "unavailable".
+// Engage:    if SleepDisabled is 1 and we hold no claim → "external", touch nothing; else remove `released` (a release
+//            never outlives the next engage), write the claim, `sudo -n pmset -a disablesleep 1`, read back; on failure
+//            turn it back to 0 (when the set ran), remove the claim → "unavailable".
 // Disengage: `sudo -n pmset -a disablesleep 0`, read back; when it reads 0, touch `released` (the watchdog then knows
 //            our own disengage restored 0 and drops its arm without touching a later foreign `disablesleep 1`, C7
 //            step 4); then remove the claim, and `pmset sleepnow` when asked (D7).
@@ -71,12 +71,19 @@ export const removeClaim = (exec, home) => ok(exec, RM, ["-f", claimPath(home)])
 /** Marks our disengage as done (C4 `released`), before the claim goes. */
 export const touchReleased = (exec, home) => ok(exec, "/bin/sh", ["-c", TOUCH_RELEASED, "sh", releasedPath(home)]);
 
+/** Removes `released` (`rm -f` removes a symlink itself, never its target). */
+export const removeReleased = (exec, home) => ok(exec, RM, ["-f", releasedPath(home)]);
+
 /** `pmset sleepnow` (D7). */
 export const sleepNow = (exec) => ok(exec, PMSET, ["sleepnow"]);
 
-/** C11 engage. `held`: we hold the claim already (a re-engage). Returns "engaged", "external" or "unavailable". */
+/** C11 engage. `held`: we hold the claim already (a re-engage). Returns "engaged", "external" or "unavailable".
+ *  `released` goes before the claim is written: a `released` left from an earlier disengage would let the watchdog
+ *  only disarm after a later disengage that could not restore 0, leaving our `disablesleep 1` with nothing to undo it
+ *  (C7 step 4). When it can't be removed, nothing is engaged. */
 export async function engage(exec, { home, text, held }) {
   if (!held && (await readSleepDisabled(exec)) === true) return "external";
+  if (!(await removeReleased(exec, home))) return "unavailable";
   if (!(await writeClaim(exec, home, text))) return "unavailable";
   const set = await setDisableSleep(exec, true);
   if (set && (await readSleepDisabled(exec)) === true) return "engaged";

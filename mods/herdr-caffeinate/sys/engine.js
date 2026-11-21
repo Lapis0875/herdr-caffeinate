@@ -267,8 +267,8 @@ export class Engine {
   }
 
   /** Marks a run stopped. A request it was handling goes back to the queue for the next run, unless it is a command
-   *  already past its reducer step: its settings and session are written, so it is finished here (applying it again
-   *  would toggle twice) and the next run's boot carries out the rest. */
+   *  that already counts as applied (see `advance`): it is finished here, and the next run's boot carries out the rest
+   *  from settings.json and runtime.json. */
   halt(run) {
     if (run.dead) return;
     run.dead = true;
@@ -456,6 +456,8 @@ export class Engine {
     }
     // Any command may retry a closed-lid engage whose read-back failed.
     run.unavailable = false;
+    // Doing a toggle twice undoes it (see `advance` and `halt`).
+    req.once = cmd.command === "toggle" || cmd.value === "toggle";
     const lid = cmd.command === "closed-lid";
     await this.cycle(run, {
       event: { type: "command", command: req.text, probed: true },
@@ -599,14 +601,22 @@ export class Engine {
   }
 
   /** One reducer step; a settings effect is written, and on a stale settings.json the step runs again on the
-   *  re-read settings. A session or trigger change is written to runtime.json at once, so a command's whole outcome
-   *  is on disk before the slow reconcile; from its first write on, a command counts as applied (see `halt`). */
+   *  re-read settings. A session or trigger change is then written to runtime.json at once, so a command's whole
+   *  outcome is on disk before the slow reconcile. When a command counts as applied (`halt` then finishes it instead of
+   *  doing it again in the next run): a toggle from its first write on, since doing it again would undo it; any other
+   *  command only once all of its writes settled, since doing it again changes nothing, and a `timer:<n>` halted
+   *  before its session reached runtime.json would otherwise end up Off. */
   async advance(run, event) {
     const facts = this.facts(run);
+    const req = event.type === "command" ? this.inflight : null;
+    const applied = () => {
+      if (req && !run.dead) req.applied = true;
+    };
     for (let attempt = 0; ; attempt += 1) {
       const now = this.deps.now();
       const out = step(run.state, { ...event, now }, facts, run.settings);
-      if (event.type === "command" && this.inflight && !run.dead) this.inflight.applied = true;
+      // Nothing is awaited between this and the first write's call, so the write is under way once it is marked.
+      if (req?.once) applied();
       const effect = out.effects.find((e) => e.type === "settings");
       if (effect && !(await run.store.saveSettings(effect.settings))) {
         if (attempt === 0 && run.store.settingsOk) {
@@ -622,6 +632,7 @@ export class Engine {
       // working time with its own `now`, which is later than the cycle's start after the awaited reads.
       run.lightAt = now;
       if (out.effects.some((e) => e.type === "runtime")) await run.store.saveRuntime(toRuntime(run.state, run.holder, null));
+      applied();
       return out;
     }
   }

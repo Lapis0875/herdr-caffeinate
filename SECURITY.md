@@ -26,7 +26,7 @@ rule and a root fail-safe. This section describes what each piece can do and to 
 
 | Piece | Runs as | Can do |
 |---|---|---|
-| The mod (`sys/`, `bin/probe.sh`) | you, inside Herdr | start and stop this Herdr's `caffeinate` holder; write its claim and `released` files; run the two `sudo -n` commands below; run `pmset sleepnow` |
+| The mod (`sys/`, `bin/probe.sh`) | you, inside Herdr | start and stop this Herdr's `caffeinate` holder; write and remove its claim and `released` files; run the two `sudo -n` commands below; run `pmset sleepnow` |
 | The sudoers rule `/etc/sudoers.d/herdr-caffeinate` | root, through `sudo -n`, for your user only | `/usr/bin/pmset -a disablesleep 0` and `/usr/bin/pmset -a disablesleep 1`, nothing else |
 | The fail-safe `/Library/PrivilegedHelperTools/io.github.lapis0875.herdr-caffeinate.failsafe` | root, started by launchd every 15 s | `pmset -a disablesleep 0`, `pmset sleepnow`, files under `/var/db/herdr-caffeinate/` |
 | `bin/install.sh`, `bin/uninstall.sh` | you, with `sudo` and your admin password | create or remove the four root paths above and `/Library/LaunchDaemons/io.github.lapis0875.herdr-caffeinate.failsafe.plist`; the uninstaller also removes your `~/.herdr/herdr-caffeinate/claim` and `released` (as you, no `sudo`) |
@@ -142,7 +142,10 @@ What a process running as you can do through the claim and `released`, which are
 - It stops a process only after `ps -o command=` shows exactly a holder command line of this Herdr
   (`/usr/bin/caffeinate -i -s [-d] -w <Herdr pid> [-t <n>]`, or the same behind `nohup` right after launch).
 - It writes the claim with `umask 077` in a 0700 folder, through a temporary file and a rename, which replaces a
-  symlink instead of following it.
+  symlink instead of following it. Before each new claim it removes `released` with `/bin/rm -f` (a symlink itself,
+  never its target), so a `released` never outlives the next engage; if that removal fails, it engages nothing and
+  closed-lid shows Unavailable. It touches `released` (`umask 077`) only after its own `disablesleep 0` reads back 0,
+  just before it removes the claim.
 - Every `disablesleep` change is read back. A change that does not take is undone, and closed-lid shows Unavailable.
 - It makes no network connections.
 

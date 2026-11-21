@@ -222,7 +222,7 @@ Closed-lid needs both.
 |---|---|---|
 | `~/.herdr/herdr-caffeinate/` | you, 0700 | the mod's runtime folder |
 | `~/.herdr/herdr-caffeinate/claim` | you, 0600 | exists while your Herdr holds `disablesleep 1`; its modification time is the heartbeat the fail-safe checks (touched every 10 s); its content `{v:1, owner:{pid, appHome}, since}` is read only by the mod |
-| `~/.herdr/herdr-caffeinate/released` | you, 0600 | touched by the mod after its own closed-lid off read back `SleepDisabled 0`, just before it removes the claim; the fail-safe reads only its modification time; the uninstaller removes it |
+| `~/.herdr/herdr-caffeinate/released` | you, 0600 | touched by the mod after its own closed-lid off read back `SleepDisabled 0`, just before it removes the claim; removed by the mod before it writes a new claim; the fail-safe reads only its modification time; the uninstaller removes it |
 | `~/.herdr/herdr-caffeinate/engine` | you, 0600 | reserved for a keeper fallback that this version does not use ([docs/spikes/S3.md](docs/spikes/S3.md)); never created |
 | `/etc/sudoers.d/herdr-caffeinate` | root:wheel 0440 | the sudoers rule above |
 | `/Library/PrivilegedHelperTools/io.github.lapis0875.herdr-caffeinate.failsafe` | root:wheel 0755 | the root copy of `bin/failsafe.sh` |
@@ -405,10 +405,11 @@ passed as arguments, never pasted into a shell string.
   closed, and whether a closed lid sleeps the Mac), with `--thermal` only while the closed-lid switch is on
   `/usr/bin/osascript -l JavaScript -e 'ObjC.import("Foundation"); $.NSProcessInfo.processInfo.thermalState'`, then
   `/usr/bin/stat -f %m` (the times of `alive`, the claim and `last-restore`) and `/bin/date +%s`.
-- The claim, which only `exec` can write outside the app home: `/bin/sh -c 'umask 077; /bin/mkdir -p … &&
-  /bin/chmod 700 … && printf … > claim.tmp && /bin/mv -f claim.tmp claim'` (written through a rename, which replaces a
-  symlink instead of following it), `/usr/bin/touch -c <claim>` (the heartbeat; never creates it) and
-  `/bin/rm -f <claim>`; before that removal, after its own `disablesleep 0` read back 0,
+- The claim, which only `exec` can write outside the app home: first `/bin/rm -f ~/.herdr/herdr-caffeinate/released`
+  (a symlink is removed itself, never its target; if that fails, nothing is engaged), then `/bin/sh -c 'umask 077;
+  /bin/mkdir -p … && /bin/chmod 700 … && printf … > claim.tmp && /bin/mv -f claim.tmp claim'` (written through a
+  rename, which replaces a symlink instead of following it), `/usr/bin/touch -c <claim>` (the heartbeat; never creates
+  it) and `/bin/rm -f <claim>`; before that removal, after its own `disablesleep 0` read back 0,
   `/bin/sh -c 'umask 077; /usr/bin/touch "$1"' sh ~/.herdr/herdr-caffeinate/released`.
 - `/usr/bin/defaults read -g AppleLanguages`: the system language, once per engine start.
 - Install… and Uninstall… open a Herdr tab (`tab.new`) running

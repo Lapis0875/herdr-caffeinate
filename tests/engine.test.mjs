@@ -159,11 +159,19 @@ class FakeMac {
       this.reads.set(path, (this.reads.get(path) ?? 0) + 1);
       return this.deliver(() => this.files.get(path)?.text ?? null);
     };
-    this.writeTextFile = (path, text, expected) => this.deliver(() => {
-      if ((this.files.get(path)?.text ?? null) !== expected) throw new Error('stale snapshot');
-      this.files.set(path, { text, mtime: this.clock.t });
-      return null;
-    });
+    // `hangWrite(path)` true: that write takes effect but its call never answers.
+    this.hangWrite = () => false;
+    this.writeTextFile = (path, text, expected) => {
+      if (this.hangWrite(path)) {
+        if ((this.files.get(path)?.text ?? null) === expected) this.files.set(path, { text, mtime: this.clock.t });
+        return new Promise(() => {});
+      }
+      return this.deliver(() => {
+        if ((this.files.get(path)?.text ?? null) !== expected) throw new Error('stale snapshot');
+        this.files.set(path, { text, mtime: this.clock.t });
+        return null;
+      });
+    };
     this.mkdir = () => this.deliver(() => undefined);
   }
 
@@ -282,7 +290,7 @@ function label({ argv }) {
   if (command === '/bin/kill') return `kill:${args[0]}`;
   if (command === '/usr/bin/sudo') return args[1] === '-l' ? 'sudo:list' : `pmset:${args.at(-1)}`;
   if (command === '/usr/bin/touch') return 'claim:touch';
-  if (command === '/bin/rm') return 'claim:rm';
+  if (command === '/bin/rm') return args[1] === RELEASED ? 'released:rm' : 'claim:rm';
   if (command === '/usr/bin/pmset') return args[0];
   if (command === '/usr/bin/defaults') return 'locale';
   return command;
@@ -712,6 +720,46 @@ test('a timer command halted after its step keeps its session: the next run resu
   assert.match(holderCommands(w)[0], new RegExp(`^${HOLDER} -t \\d+$`));
 });
 
+// A host call of the stuck run never answers, but what it did stays done (S2/F2).
+const hangOnce = (match) => {
+  let stuck = true;
+  return (...args) => {
+    if (!stuck || !match(...args)) return false;
+    stuck = false;
+    return true;
+  };
+};
+
+test('F10: a timer command halted while its settings write is pending is not acknowledged; the next run does it and its session is there', async () => {
+  const w = world();
+  const host = await w.attach('host');
+  w.mac.hangWrite = hangOnce((path) => path === settingsPath(APP));
+  const done = w.within(host, () => w.engine.command(host.copy, 'timer:30'));
+  let answered = false;
+  done.then(() => (answered = true));
+  await w.clock.advance(STALL_MS);
+  assert.equal(answered, false, 'pending while the run is stuck in the settings write');
+  await w.clock.advance(2 * COPY_CHECK_MS + 1000);
+  assert.ok(w.logs.some((l) => l.includes('no progress')), 'the stuck run was replaced');
+  assert.deepEqual(await w.until(done), { command: 'timer', value: 30 });
+  assert.equal(w.runtime().session?.mode, 'timer');
+  assert.equal(w.settings().mode, 'timer');
+  assert.equal(w.c3().mode, 'timer');
+  assert.equal(holderCommands(w).length, 1);
+});
+
+test('F10: a toggle halted while its settings write is pending counts as applied: toggled once after the next run', async () => {
+  const w = world({ settings: { mode: 'on' } });
+  const host = await w.attach('host');
+  w.mac.hangWrite = hangOnce((path) => path === settingsPath(APP));
+  const done = w.within(host, () => w.engine.command(host.copy, 'display:toggle'));
+  await w.clock.advance(STALL_MS + 2 * COPY_CHECK_MS + 1000);
+  assert.deepEqual(await w.until(done), { command: 'display', value: 'toggle' });
+  assert.equal(w.settings().display, true, 'toggled once');
+  assert.equal(w.c3().display, true);
+  assert.deepEqual(holderCommands(w), [`/usr/bin/caffeinate -i -s -d -w ${HERDR}`]);
+});
+
 test('a run stuck on a host call that never answers is replaced by the host check; its queued command still runs', async () => {
   const w = world();
   const host = await w.attach('host');
@@ -964,7 +1012,7 @@ test('F8: a disengage that reads back 0 touches released before removing the cla
   await w.cmd(host, 'mode:on');
   await w.cmd(host, 'closed-lid:on');
   assert.equal(w.c3().closedLid.status, 'engaged');
-  w.mac.files.delete(RELEASED);
+  assert.equal(w.mac.files.has(RELEASED), false, 'the re-engage (mode:on) removed the earlier release');
   w.mac.pmsetSticks = false;
   from = w.mark();
   await w.cmd(host, 'closed-lid:off');
@@ -972,6 +1020,42 @@ test('F8: a disengage that reads back 0 touches released before removing the cla
   assert.equal(w.mac.files.has(RELEASED), false);
   assert.equal(w.mac.files.has(CLAIM), false);
   assert.equal(w.mac.sleepDisabled, 1);
+});
+
+test('F10: an engage removes an earlier released before it writes the claim, so a later failed disengage leaves none', async () => {
+  const w = world({ settings: { mode: 'on' } });
+  const host = await w.attach('host');
+  await w.cmd(host, 'closed-lid:on');
+  await w.cmd(host, 'closed-lid:off');
+  assert.ok(w.mac.files.has(RELEASED), 'a clean release');
+
+  const from = w.mark();
+  await w.cmd(host, 'closed-lid:on');
+  const steps = ['readback', 'released:rm', 'claim:write', 'pmset:1'];
+  assert.deepEqual(w.labels(from).filter((l) => steps.includes(l)), ['readback', 'released:rm', 'claim:write', 'pmset:1', 'readback']);
+  assert.equal(w.mac.files.has(RELEASED), false);
+  assert.equal(w.c3().closedLid.status, 'engaged');
+
+  // `disablesleep 0` does not take: no release is left behind, so the armed watchdog restores (claim-gone).
+  w.mac.pmsetSticks = false;
+  await w.cmd(host, 'closed-lid:off');
+  assert.equal(w.mac.files.has(RELEASED), false);
+  assert.equal(w.mac.files.has(CLAIM), false);
+  assert.equal(w.mac.sleepDisabled, 1);
+});
+
+test('F10: the external path removes no released and writes no claim', async () => {
+  const w = world({ settings: { mode: 'on' } });
+  const host = await w.attach('host');
+  await w.cmd(host, 'closed-lid:on');
+  await w.cmd(host, 'closed-lid:off');
+  assert.ok(w.mac.files.has(RELEASED));
+  w.mac.sleepDisabled = 1;
+  const from = w.mark();
+  await w.cmd(host, 'closed-lid:on');
+  assert.equal(w.c3().closedLid.status, 'external');
+  assert.ok(!w.labels(from).some((l) => ['released:rm', 'claim:write', 'pmset:1'].includes(l)));
+  assert.ok(w.mac.files.has(RELEASED));
 });
 
 test('F4: after a disengage C3 shows the read-back (off, not external) through later steps; a foreign disablesleep 1 is still external', async () => {

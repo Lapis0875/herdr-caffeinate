@@ -218,7 +218,7 @@ sudoers 규칙 하나가 허용하는 정확히 두 명령만 `sudo -n`(대화 �
 |---|---|---|
 | `~/.herdr/herdr-caffeinate/` | 나, 0700 | 모드의 실행 폴더 |
 | `~/.herdr/herdr-caffeinate/claim` | 나, 0600 | 내 Herdr가 `disablesleep 1`을 쥐고 있는 동안 있는 파일. 수정 시각이 안전장치가 보는 심장 박동입니다(10초마다 갱신). 내용 `{v:1, owner:{pid, appHome}, since}`는 모드만 읽습니다 |
-| `~/.herdr/herdr-caffeinate/released` | 나, 0600 | 모드가 덮개 닫힘을 스스로 끄고 `SleepDisabled 0`을 다시 읽어 확인한 뒤, claim을 지우기 직전에 갱신하는 파일. 안전장치는 수정 시각만 읽고, 제거 프로그램이 지웁니다 |
+| `~/.herdr/herdr-caffeinate/released` | 나, 0600 | 모드가 덮개 닫힘을 스스로 끄고 `SleepDisabled 0`을 다시 읽어 확인한 뒤, claim을 지우기 직전에 갱신하는 파일. 모드가 새 claim을 쓰기 전에 지웁니다. 안전장치는 수정 시각만 읽고, 제거 프로그램이 지웁니다 |
 | `~/.herdr/herdr-caffeinate/engine` | 나, 0600 | 이 버전은 쓰지 않는 keeper 대안용 자리입니다([docs/spikes/S3.md](docs/spikes/S3.md)). 만들지 않습니다 |
 | `/etc/sudoers.d/herdr-caffeinate` | root:wheel 0440 | 위의 sudoers 규칙 |
 | `/Library/PrivilegedHelperTools/io.github.lapis0875.herdr-caffeinate.failsafe` | root:wheel 0755 | `bin/failsafe.sh`의 root 사본 |
@@ -395,10 +395,12 @@ claim과 `released`를 지우므로 비어 있습니다). `rm -r ~/.herdr/herdr-
   닫혔는지, 닫으면 잠드는지), 덮개 닫힘 스위치가 켜져 있을 때만 `--thermal`로
   `/usr/bin/osascript -l JavaScript -e 'ObjC.import("Foundation"); $.NSProcessInfo.processInfo.thermalState'`, 그리고
   `/usr/bin/stat -f %m`(`alive`, claim, `last-restore`의 시각)과 `/bin/date +%s`.
-- claim은 앱 홈 밖이라 `exec`로만 쓸 수 있습니다: `/bin/sh -c 'umask 077; /bin/mkdir -p … && /bin/chmod 700 … &&
-  printf … > claim.tmp && /bin/mv -f claim.tmp claim'`(이름 바꾸기로 쓰므로 심볼릭 링크를 따라가지 않고 바꿔 놓습니다),
-  `/usr/bin/touch -c <claim>`(심장 박동, 파일을 새로 만들지는 않음), `/bin/rm -f <claim>`. claim을 지우기 전, 자기
-  `disablesleep 0`을 다시 읽어 0으로 확인했으면 `/bin/sh -c 'umask 077; /usr/bin/touch "$1"' sh ~/.herdr/herdr-caffeinate/released`.
+- claim은 앱 홈 밖이라 `exec`로만 쓸 수 있습니다: 먼저 `/bin/rm -f ~/.herdr/herdr-caffeinate/released`(심볼릭 링크면
+  링크만 지우고 대상은 건드리지 않습니다. 지우지 못하면 덮개 닫힘을 켜지 않습니다), 이어서 `/bin/sh -c 'umask 077;
+  /bin/mkdir -p … && /bin/chmod 700 … && printf … > claim.tmp && /bin/mv -f claim.tmp claim'`(이름 바꾸기로 쓰므로
+  심볼릭 링크를 따라가지 않고 바꿔 놓습니다), `/usr/bin/touch -c <claim>`(심장 박동, 파일을 새로 만들지는 않음),
+  `/bin/rm -f <claim>`. claim을 지우기 전, 자기 `disablesleep 0`을 다시 읽어 0으로 확인했으면
+  `/bin/sh -c 'umask 077; /usr/bin/touch "$1"' sh ~/.herdr/herdr-caffeinate/released`.
 - `/usr/bin/defaults read -g AppleLanguages`: 시스템 언어, 엔진이 시작할 때 한 번.
 - 설치…와 제거…는 `/bin/sh -c '/bin/sh "$1"; …; read _' sh <앱 홈>/mods/herdr-caffeinate/bin/install.sh`(또는
   `uninstall.sh`)를 실행하는 Herdr 탭(`tab.new`)을 엽니다.
